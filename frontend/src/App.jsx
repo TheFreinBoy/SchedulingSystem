@@ -1,122 +1,179 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useState } from 'react';
+import {
+    AppBar,
+    Toolbar,
+    Typography,
+    Container,
+    Box,
+    IconButton,
+    Drawer,
+    List,
+    ListItem,
+    ListItemButton,
+    ListItemIcon,
+    ListItemText,
+    Avatar,
+    Divider,
+} from '@mui/material';
+import MenuRoundedIcon from '@mui/icons-material/MenuRounded';
+import CalendarMonthRoundedIcon from '@mui/icons-material/CalendarMonthRounded';
+import PeopleAltRoundedIcon from '@mui/icons-material/PeopleAltRounded';
+import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
+import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 
-function App() {
-  const [count, setCount] = useState(0)
+import Employees from './pages/Employees';
+import Schedule from './pages/Schedule';
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+function Layout() {
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const location = useLocation();
 
-      <div className="ticks"></div>
+    const menuItems = [
+        { text: 'Графіки', path: '/schedule', icon: <CalendarMonthRoundedIcon /> },
+        { text: 'Працівники', path: '/employees', icon: <PeopleAltRoundedIcon /> },
+    ];
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
+    return (
+        <Box sx={{ flexGrow: 1, bgcolor: 'background.default', minHeight: '100vh', color: 'text.primary' }}>
+            <AppBar
+                position="sticky"
+                elevation={0}
+                sx={{
+                    bgcolor: 'rgba(24, 21, 21, 0.85)',
+                    backdropFilter: 'blur(12px)',
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+                }}
+            >
+                <Toolbar sx={{ justifyContent: 'space-between', px: { xs: 2, md: 4 } }}>
+                    <IconButton
+                        onClick={() => setDrawerOpen(true)}
+                        sx={{
+                            bgcolor: '#222222',
+                            color: '#F3F3F3',
+                            border: '1px solid rgba(255, 255, 255, 0.08)',
+                            borderRadius: '10px',
+                            '&:hover': { bgcolor: '#2C2929', borderColor: '#B4F82C' },
+                        }}
+                    >
+                        <MenuRoundedIcon />
+                    </IconButton>
+
+                    <Avatar
+                        sx={{
+                            width: 40,
+                            height: 40,
+                            bgcolor: '#222222',
+                            color: '#B4F82C',
+                            border: '1px solid rgba(180, 248, 44, 0.35)',
+                            cursor: 'pointer',
+                            transition: '0.2s',
+                            '&:hover': { bgcolor: 'rgba(180, 248, 44, 0.12)' },
+                        }}
+                    >
+                        <PersonRoundedIcon fontSize="small" />
+                    </Avatar>
+                </Toolbar>
+            </AppBar>
+
+            {/* Залізобетонний варіант Drawer без PaperProps */}
+            <Drawer
+                anchor="left"
+                open={drawerOpen}
+                onClose={() => setDrawerOpen(false)}
+                sx={{
+                    '& .MuiDrawer-paper': {
+                        width: 420, // Ширина гарантовано застосується тут
+                        bgcolor: '#1D1A1A',
+                        borderRight: '1px solid rgba(255, 255, 255, 0.07)',
+                        p: 3,
+                    }
+                }}
+            >
+                <Box
+                    sx={{
+                        height: 54,
+                        mb: 2,
+                        borderRadius: '12px',
+                        border: '1px dashed rgba(255, 255, 255, 0.15)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'text.secondary',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        letterSpacing: '0.08em',
+                    }}
                 >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+                    ВАШ ЛОГОТИП
+                </Box>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+                <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.06)', mb: 2 }} />
+
+                <List sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    {menuItems.map((item) => {
+                        const isActive = location.pathname === item.path;
+                        return (
+                            <ListItem key={item.path} disablePadding>
+                                <ListItemButton
+                                    component={Link}
+                                    to={item.path}
+                                    onClick={() => setDrawerOpen(false)}
+                                    sx={{
+                                        borderRadius: '10px',
+                                        bgcolor: isActive ? 'rgba(180, 248, 44, 0.14)' : 'transparent',
+                                        color: isActive ? '#B4F82C' : '#F3F3F3',
+                                        '&:hover': {
+                                            bgcolor: isActive ? 'rgba(180, 248, 44, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                                        },
+                                    }}
+                                >
+                                    <ListItemIcon sx={{ minWidth: 38, color: isActive ? '#B4F82C' : '#989898' }}>
+                                        {item.icon}
+                                    </ListItemIcon>
+
+                                    {/* Залізобетонний варіант тексту без primaryTypographyProps */}
+                                    <ListItemText
+                                        disableTypography
+                                        primary={
+                                            <Typography sx={{ fontWeight: isActive ? 700 : 500, fontSize: '0.95rem' }}>
+                                                {item.text}
+                                            </Typography>
+                                        }
+                                    />
+                                </ListItemButton>
+                            </ListItem>
+                        );
+                    })}
+                </List>
+            </Drawer>
+
+            <Container maxWidth="xl" sx={{ mt: 3, px: { xs: 2, md: 4 } }}>
+                <Routes>
+                    <Route
+                        path="/"
+                        element={
+                            <Box sx={{ textAlign: 'center', mt: 10 }}>
+                                <Typography variant="h4" gutterBottom>
+                                    Головна панель
+                                </Typography>
+                                <Typography color="text.secondary">
+                                    Відкрийте меню зліва зверху, щоб перейти до графіків або працівників
+                                </Typography>
+                            </Box>
+                        }
+                    />
+                    <Route path="/employees" element={<Employees />} />
+                    <Route path="/schedule" element={<Schedule />} />
+                </Routes>
+            </Container>
+        </Box>
+    );
 }
 
-export default App
+export default function App() {
+    return (
+        <BrowserRouter>
+            <Layout />
+        </BrowserRouter>
+    );
+}
