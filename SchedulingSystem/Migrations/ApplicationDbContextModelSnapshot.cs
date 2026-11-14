@@ -38,6 +38,9 @@ namespace SchedulingSystem.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("LastName")
                         .IsRequired()
                         .HasColumnType("text");
@@ -45,11 +48,21 @@ namespace SchedulingSystem.Migrations
                     b.Property<int>("MaxHoursPerWeek")
                         .HasColumnType("integer");
 
+                    b.Property<string>("MiddleName")
+                        .HasColumnType("text");
+
                     b.Property<int>("OffDaysPattern")
                         .HasColumnType("integer");
 
+                    b.Property<string>("PasswordHash")
+                        .HasColumnType("text");
+
                     b.Property<int>("PositionId")
                         .HasColumnType("integer");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<int>("WorkDaysPattern")
                         .HasColumnType("integer");
@@ -160,6 +173,10 @@ namespace SchedulingSystem.Migrations
 
                     b.Property<int>("RequiredStaffCount")
                         .HasColumnType("integer");
+
+                    b.Property<string>("ShortCode")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<TimeSpan>("StartTime")
                         .HasColumnType("interval");
