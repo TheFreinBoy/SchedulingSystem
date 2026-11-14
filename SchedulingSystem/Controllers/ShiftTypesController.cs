@@ -5,6 +5,7 @@ using SchedulingSystem.DTOs;
 using SchedulingSystem.Entities;
 
 namespace SchedulingSystem.Controllers;
+
 [Route("api/[controller]")]
 [ApiController]
 public class ShiftTypesController(ApplicationDbContext context) : ControllerBase
@@ -18,9 +19,11 @@ public class ShiftTypesController(ApplicationDbContext context) : ControllerBase
             {
                 Id = st.Id,
                 Name = st.Name,
+                ShortCode = st.ShortCode,
                 StartTime = st.StartTime,
                 EndTime = st.EndTime,
                 RequiredStaffCount = st.RequiredStaffCount,
+                PositionId = st.PositionId,
                 PositionName = st.Position!.Name
             })
             .ToListAsync();
@@ -36,7 +39,8 @@ public class ShiftTypesController(ApplicationDbContext context) : ControllerBase
 
         var shiftType = new ShiftType
         {
-            Name = dto.Name,
+            Name = dto.Name.Trim(),
+            ShortCode = dto.ShortCode.Trim().ToUpper(),
             StartTime = dto.StartTime,
             EndTime = dto.EndTime,
             RequiredStaffCount = dto.RequiredStaffCount,
@@ -46,6 +50,63 @@ public class ShiftTypesController(ApplicationDbContext context) : ControllerBase
         context.ShiftTypes.Add(shiftType);
         await context.SaveChangesAsync();
 
-        return CreatedAtAction(nameof(GetShiftTypes), new { id = shiftType.Id }, null); 
+        return CreatedAtAction(nameof(GetShiftTypes), new { id = shiftType.Id }, new ShiftTypeDto
+        {
+            Id = shiftType.Id,
+            Name = shiftType.Name,
+            ShortCode = shiftType.ShortCode,
+            StartTime = shiftType.StartTime,
+            EndTime = shiftType.EndTime,
+            RequiredStaffCount = shiftType.RequiredStaffCount,
+            PositionId = shiftType.PositionId,
+            PositionName = position.Name
+        });
+    }
+
+    [HttpPut("{id:int}")]
+    public async Task<ActionResult<ShiftTypeDto>> UpdateShiftType(int id, UpdateShiftTypeDto dto)
+    {
+        var shiftType = await context.ShiftTypes.FindAsync(id);
+        if (shiftType == null) return NotFound("Тип зміни не знайдено.");
+
+        var position = await context.Positions.FindAsync(dto.PositionId);
+        if (position == null) return BadRequest("Посада не знайдена.");
+
+        shiftType.Name = dto.Name.Trim();
+        shiftType.ShortCode = dto.ShortCode.Trim().ToUpper();
+        shiftType.StartTime = dto.StartTime;
+        shiftType.EndTime = dto.EndTime;
+        shiftType.RequiredStaffCount = dto.RequiredStaffCount;
+        shiftType.PositionId = dto.PositionId;
+
+        await context.SaveChangesAsync();
+
+        return Ok(new ShiftTypeDto
+        {
+            Id = shiftType.Id,
+            Name = shiftType.Name,
+            ShortCode = shiftType.ShortCode,
+            StartTime = shiftType.StartTime,
+            EndTime = shiftType.EndTime,
+            RequiredStaffCount = shiftType.RequiredStaffCount,
+            PositionId = shiftType.PositionId,
+            PositionName = position.Name
+        });
+    }
+
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> DeleteShiftType(int id)
+    {
+        var shiftType = await context.ShiftTypes.FindAsync(id);
+        if (shiftType == null) return NotFound("Тип зміни не знайдено.");
+
+        var isUsed = await context.ShiftAssignments.AnyAsync(sa => sa.ShiftTypeId == id);
+        if (isUsed)
+            return BadRequest("Неможливо видалити тип зміни, оскільки він вже використовується в розкладі.");
+
+        context.ShiftTypes.Remove(shiftType);
+        await context.SaveChangesAsync();
+
+        return NoContent();
     }
 }
