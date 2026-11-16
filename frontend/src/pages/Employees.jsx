@@ -11,7 +11,6 @@ import {
     CircularProgress,
     Box,
     Button,
-    IconButton,
     Dialog,
     DialogTitle,
     DialogContent,
@@ -23,7 +22,6 @@ import {
     Snackbar,
 } from '@mui/material';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
-import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import { apiFetch } from '../api/apiClient';
 
@@ -44,15 +42,14 @@ export default function Employees() {
     const [positions, setPositions] = useState([]);
     const [loading, setLoading] = useState(true);
 
-    // Модальне вікно створення / редагування
+    // Модальне вікно створення / редагування / видалення
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editingEmployee, setEditingEmployee] = useState(null);
+    const [confirmDelete, setConfirmDelete] = useState(false);
     const [formData, setFormData] = useState(emptyForm);
     const [errorMsg, setErrorMsg] = useState('');
     const [saving, setSaving] = useState(false);
 
-    // Модальне вікно підтвердження видалення / архівації
-    const [deleteTarget, setDeleteTarget] = useState(null);
     const [toast, setToast] = useState({ open: false, message: '', severity: 'success' });
 
     const fetchData = async () => {
@@ -81,6 +78,7 @@ export default function Employees() {
 
     const handleOpenCreate = () => {
         setEditingEmployee(null);
+        setConfirmDelete(false);
         setFormData({
             ...emptyForm,
             positionId: positions.length > 0 ? positions[0].id : '',
@@ -91,6 +89,7 @@ export default function Employees() {
 
     const handleOpenEdit = (emp) => {
         setEditingEmployee(emp);
+        setConfirmDelete(false);
         setFormData({
             firstName: emp.firstName,
             lastName: emp.lastName,
@@ -162,29 +161,30 @@ export default function Employees() {
     };
 
     const handleDelete = async () => {
-        if (!deleteTarget) return;
+        if (!editingEmployee) return;
+        setSaving(true);
+        setErrorMsg('');
         try {
-            const response = await apiFetch(`/Employees/${deleteTarget.id}`, {
+            const response = await apiFetch(`/Employees/${editingEmployee.id}`, {
                 method: 'DELETE',
             });
-            if (response.ok) {
-                const data = await response.json().catch(() => ({}));
-                await fetchData();
-                setToast({
-                    open: true,
-                    message: data.message || data.Message || 'Працівника видалено.',
-                    severity: 'success',
-                });
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || 'Не вдалося видалити працівника.');
             }
-        } catch (error) {
-            console.error('Помилка видалення:', error);
+            const data = await response.json().catch(() => ({}));
+            await fetchData();
+            setDialogOpen(false);
             setToast({
                 open: true,
-                message: 'Не вдалося видалити працівника.',
-                severity: 'error',
+                message: data.message || data.Message || 'Працівника видалено.',
+                severity: 'success',
             });
+        } catch (err) {
+            setErrorMsg(err.message);
         } finally {
-            setDeleteTarget(null);
+            setSaving(false);
+            setConfirmDelete(false);
         }
     };
 
@@ -230,7 +230,7 @@ export default function Employees() {
                         Працівники
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                        Керування персоналом, тижневими лімітами годин та шаблонами графіка
+                        Натисніть на рядок працівника, щоб змінити дані або перевести в архів
                     </Typography>
                 </Box>
 
@@ -270,7 +270,6 @@ export default function Employees() {
                                 <TableCell sx={{ color: '#989898', fontWeight: 600, borderBottomColor: 'rgba(255,255,255,0.06)' }}>Email</TableCell>
                                 <TableCell align="center" sx={{ color: '#989898', fontWeight: 600, borderBottomColor: 'rgba(255,255,255,0.06)' }}>Години (тиждень)</TableCell>
                                 <TableCell align="center" sx={{ color: '#989898', fontWeight: 600, borderBottomColor: 'rgba(255,255,255,0.06)' }}>Графік</TableCell>
-                                <TableCell align="right" sx={{ color: '#989898', fontWeight: 600, borderBottomColor: 'rgba(255,255,255,0.06)' }}>Дії</TableCell>
                             </TableRow>
                         </TableHead>
                         <TableBody>
@@ -282,9 +281,12 @@ export default function Employees() {
                                 return (
                                     <TableRow
                                         key={emp.id}
+                                        onClick={() => handleOpenEdit(emp)}
                                         sx={{
+                                            cursor: 'pointer',
                                             opacity: isArchived ? 0.55 : 1,
-                                            '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.03)' },
+                                            transition: 'background-color 0.15s',
+                                            '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.05)' },
                                             '& td': { borderBottomColor: 'rgba(255, 255, 255, 0.05)' },
                                         }}
                                     >
@@ -365,36 +367,6 @@ export default function Employees() {
                                                 {emp.workDaysPattern} / {emp.offDaysPattern}
                                             </Box>
                                         </TableCell>
-                                        <TableCell align="right">
-                                            <Stack direction="row" spacing={0.5} sx={{ justifyContent: 'flex-end' }}>
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={(e) => {
-                                                        e.currentTarget.blur();
-                                                        handleOpenEdit(emp);
-                                                    }}
-                                                    sx={{
-                                                        color: '#989898',
-                                                        '&:hover': { color: '#B4F82C', bgcolor: 'rgba(180, 248, 44, 0.1)' },
-                                                    }}
-                                                >
-                                                    <EditRoundedIcon fontSize="small" />
-                                                </IconButton>
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={(e) => {
-                                                        e.currentTarget.blur();
-                                                        setDeleteTarget(emp);
-                                                    }}
-                                                    sx={{
-                                                        color: '#989898',
-                                                        '&:hover': { color: '#F87171', bgcolor: 'rgba(248, 113, 113, 0.1)' },
-                                                    }}
-                                                >
-                                                    <DeleteOutlineRoundedIcon fontSize="small" />
-                                                </IconButton>
-                                            </Stack>
-                                        </TableCell>
                                     </TableRow>
                                 );
                             })}
@@ -403,7 +375,7 @@ export default function Employees() {
                 </TableContainer>
             )}
 
-            {/* Модальне вікно додавання / редагування */}
+            {/* Модальне вікно додавання / редагування / видалення */}
             <Dialog
                 open={dialogOpen}
                 onClose={() => setDialogOpen(false)}
@@ -517,59 +489,54 @@ export default function Employees() {
                         />
                     </Stack>
                 </DialogContent>
-                <DialogActions sx={{ px: 3, pb: 2.5 }}>
-                    <Button onClick={() => setDialogOpen(false)} sx={{ color: '#989898' }}>
-                        Скасувати
-                    </Button>
-                    <Button
-                        variant="contained"
-                        onClick={handleSave}
-                        disabled={saving}
-                        sx={{
-                            bgcolor: '#B4F82C',
-                            color: '#181515',
-                            fontWeight: 700,
-                            px: 3,
-                            '&:hover': { bgcolor: '#a3e61e' },
-                        }}
-                    >
-                        {saving ? 'Збереження...' : 'Зберегти'}
-                    </Button>
-                </DialogActions>
-            </Dialog>
+                <DialogActions sx={{ px: 3, pb: 2.5, justifyContent: 'space-between' }}>
+                    {editingEmployee ? (
+                        confirmDelete ? (
+                            <Button
+                                variant="contained"
+                                onClick={handleDelete}
+                                disabled={saving}
+                                sx={{
+                                    bgcolor: '#F87171',
+                                    color: '#181515',
+                                    fontWeight: 700,
+                                    '&:hover': { bgcolor: '#ef4444' },
+                                }}
+                            >
+                                Підтвердити видалення
+                            </Button>
+                        ) : (
+                            <Button
+                                startIcon={<DeleteOutlineRoundedIcon />}
+                                onClick={() => setConfirmDelete(true)}
+                                sx={{ color: '#F87171' }}
+                            >
+                                Видалити
+                            </Button>
+                        )
+                    ) : (
+                        <Box />
+                    )}
 
-            {/* Підтвердження видалення */}
-            <Dialog
-                open={Boolean(deleteTarget)}
-                onClose={() => setDeleteTarget(null)}
-                slotProps={dialogPaperSlotProps}
-            >
-                <DialogTitle sx={{ fontWeight: 700 }}>Видалити працівника?</DialogTitle>
-                <DialogContent>
-                    <Typography color="text.secondary">
-                        Ви дійсно хочете видалити{' '}
-                        <strong style={{ color: '#F3F3F3' }}>
-                            {deleteTarget ? formatFullName(deleteTarget) : ''}
-                        </strong>
-                        ? Якщо працівник уже має зміни в розкладі, його буде переведено в архів зі збереженням історії.
-                    </Typography>
-                </DialogContent>
-                <DialogActions sx={{ px: 3, pb: 2 }}>
-                    <Button onClick={() => setDeleteTarget(null)} sx={{ color: '#989898' }}>
-                        Скасувати
-                    </Button>
-                    <Button
-                        variant="contained"
-                        onClick={handleDelete}
-                        sx={{
-                            bgcolor: '#F87171',
-                            color: '#181515',
-                            fontWeight: 700,
-                            '&:hover': { bgcolor: '#ef4444' },
-                        }}
-                    >
-                        Підтвердити
-                    </Button>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                        <Button onClick={() => setDialogOpen(false)} sx={{ color: '#989898' }}>
+                            Скасувати
+                        </Button>
+                        <Button
+                            variant="contained"
+                            onClick={handleSave}
+                            disabled={saving}
+                            sx={{
+                                bgcolor: '#B4F82C',
+                                color: '#181515',
+                                fontWeight: 700,
+                                px: 3,
+                                '&:hover': { bgcolor: '#a3e61e' },
+                            }}
+                        >
+                            {saving ? 'Збереження...' : 'Зберегти'}
+                        </Button>
+                    </Box>
                 </DialogActions>
             </Dialog>
 

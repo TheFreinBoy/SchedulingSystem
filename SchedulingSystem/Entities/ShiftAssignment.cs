@@ -1,3 +1,5 @@
+using System;
+
 namespace SchedulingSystem.Entities;
 
 public class ShiftAssignment

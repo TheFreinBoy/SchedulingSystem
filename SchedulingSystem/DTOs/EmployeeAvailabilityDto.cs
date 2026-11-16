@@ -1,3 +1,5 @@
+using System;
+
 namespace SchedulingSystem.DTOs;
 
 public class EmployeeAvailabilityDto

@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace SchedulingSystem.Entities;
 
 public class Position

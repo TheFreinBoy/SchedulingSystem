@@ -29,7 +29,9 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Employees from './pages/Employees';
 import Schedule from './pages/Schedule';
 import ShiftTypes from './pages/ShiftTypes';
+import Positions from './pages/Positions';
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
+
 
 
 function Layout() {
@@ -42,6 +44,7 @@ function Layout() {
         { text: 'Графіки', path: '/schedule', icon: <CalendarMonthRoundedIcon />, adminOnly: false },
         { text: 'Працівники', path: '/employees', icon: <PeopleAltRoundedIcon />, adminOnly: true },
         { text: 'Типи змін', path: '/shift-types', icon: <AccessTimeRoundedIcon />, adminOnly: true },
+        { text: 'Посади', path: '/positions', icon: <BadgeRoundedIcon />}
     ];
 
     const menuItems = allMenuItems.filter((item) => !item.adminOnly || isAdmin);
@@ -183,7 +186,6 @@ function Layout() {
                         letterSpacing: '0.08em',
                     }}
                 >
-                    ВАШ ЛОГОТИП
                 </Box>
 
                 <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.06)', mb: 2 }} />
@@ -248,6 +250,7 @@ function Layout() {
                         path="/shift-types"
                         element={isAdmin ? <ShiftTypes /> : <Navigate to="/schedule" replace />}
                     />
+                    <Route path="/positions" element={<Positions />} />
                 </Routes>
             </Container>
         </Box>
