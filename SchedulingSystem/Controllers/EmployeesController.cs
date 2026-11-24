@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using SchedulingSystem.Data;
 using SchedulingSystem.Entities;
 using SchedulingSystem.DTOs;
+using System.Linq;
 
 namespace SchedulingSystem.Controllers;
 
