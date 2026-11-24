@@ -8,33 +8,93 @@ using SchedulingSystem.Entities;
 
 namespace SchedulingSystem.Services;
 
-public class ScheduleGeneratorService(ApplicationDbContext context) : IScheduleGeneratorService
+public class ScheduleGeneratorService(
+    ApplicationDbContext context,
+    IScheduleValidationService validationService) : IScheduleGeneratorService
 {
-    public async Task<int> GenerateScheduleAsync(DateOnly startDate, DateOnly endDate)
+    public async Task<int> GenerateScheduleAsync(DateOnly startDate, DateOnly endDate, int? positionId = null)
+    {
+        var allShiftTypes = await context.ShiftTypes.ToListAsync();
+        var shiftTypesMap = allShiftTypes.ToDictionary(st => st.Id);
+
+        var targetShiftTypes = positionId.HasValue
+            ? allShiftTypes.Where(st => st.PositionId == positionId.Value).ToList()
+            : allShiftTypes;
+
+        var activeEmployees = await context.Employees
+            .Where(e => e.IsActive)
+            .Include(e => e.Availabilities)
+            .ToListAsync();
+
+        var contextStart = startDate.AddDays(-14);
+        var contextEnd = endDate.AddDays(14);
+
+        var knownAssignments = await context.ShiftAssignments
+            .Where(sa => sa.Date >= contextStart && sa.Date <= contextEnd)
+            .ToListAsync();
+
+        var newAssignments = new List<ShiftAssignment>();
+        var assignmentsToRemove = new List<ShiftAssignment>();
+        int generatedAssignedCount = 0;
+
+        for (var date = startDate; date <= endDate; date = date.AddDays(1))
         {
-            var shiftTypes = await context.ShiftTypes.ToListAsync();
-            
-            var employees = await context.Employees
-                .Include(e => e.Availabilities)
-                .Include(e => e.ShiftAssignments)
-                .ThenInclude(sa => sa.ShiftType)
-                .ToListAsync();
+            int diffToMonday = (7 + (date.DayOfWeek - DayOfWeek.Monday)) % 7;
+            var weekStart = date.AddDays(-diffToMonday);
+            var weekEnd = weekStart.AddDays(6);
 
-            var newAssignments = new List<ShiftAssignment>();
-            int generatedCount = 0;
-
-            for (var date = startDate; date <= endDate; date = date.AddDays(1))
+            foreach (var shift in targetShiftTypes)
             {
-                foreach (var shift in shiftTypes)
+                int requiredStaff = Math.Max(1, shift.RequiredStaffCount);
+
+                int alreadyAssigned = knownAssignments.Count(sa =>
+                    sa.Date == date &&
+                    sa.ShiftTypeId == shift.Id &&
+                    sa.EmployeeId.HasValue);
+
+                var existingUnassigned = knownAssignments
+                    .Where(sa => sa.Date == date && sa.ShiftTypeId == shift.Id && !sa.EmployeeId.HasValue)
+                    .ToList();
+
+                int needed = Math.Max(0, requiredStaff - alreadyAssigned);
+                int assignedNow = 0;
+
+                if (needed > 0)
                 {
-                    int assignedStaff = 0;
-                    var eligibleEmployees = employees.Where(e => e.PositionId == shift.PositionId).ToList();
+                    var rankedCandidates = activeEmployees
+                        .Where(e => e.PositionId == shift.PositionId)
+                        .Select(emp =>
+                        {
+                            double weekHours = knownAssignments
+                                .Where(sa => sa.EmployeeId == emp.Id && sa.Date >= weekStart && sa.Date <= weekEnd && shiftTypesMap.ContainsKey(sa.ShiftTypeId))
+                                .Sum(sa =>
+                                {
+                                    var st = shiftTypesMap[sa.ShiftTypeId];
+                                    return validationService.CalculateShiftDurationHours(st.StartTime, st.EndTime);
+                                });
 
-                    foreach (var emp in eligibleEmployees)
+                            double maxHours = emp.MaxHoursPerWeek > 0 ? emp.MaxHoursPerWeek : 40;
+                            double loadRatio = weekHours / maxHours;
+                            return new { Employee = emp, LoadRatio = loadRatio, WeekHours = weekHours };
+                        })
+                        .OrderBy(x => x.LoadRatio)
+                        .ThenBy(x => x.WeekHours)
+                        .ThenBy(x => x.Employee.Id)
+                        .Select(x => x.Employee)
+                        .ToList();
+
+                    foreach (var emp in rankedCandidates)
                     {
-                        if (assignedStaff >= shift.RequiredStaffCount) break;
+                        if (assignedNow >= needed) break;
 
-                        if (CanAssign(emp, date, shift, newAssignments, shiftTypes))
+                        var violations = validationService.ValidateCandidateAssignment(
+                            emp,
+                            date,
+                            shift,
+                            knownAssignments,
+                            shiftTypesMap);
+
+                        if (violations.Count == 0)
                         {
                             var assignment = new ShiftAssignment
                             {
@@ -44,97 +104,63 @@ public class ScheduleGeneratorService(ApplicationDbContext context) : IScheduleG
                                 Status = "Generated Auto"
                             };
 
+                            knownAssignments.Add(assignment);
                             newAssignments.Add(assignment);
-                            assignedStaff++;
-                            generatedCount++;
+                            assignedNow++;
+                            generatedAssignedCount++;
                         }
                     }
                 }
+
+                int stillMissing = Math.Max(0, needed - assignedNow);
+
+                if (existingUnassigned.Count > stillMissing)
+                {
+                    var excess = existingUnassigned.Take(existingUnassigned.Count - stillMissing).ToList();
+                    foreach (var item in excess)
+                    {
+                        knownAssignments.Remove(item);
+                        if (item.Id != 0)
+                        {
+                            assignmentsToRemove.Add(item);
+                        }
+                    }
+                }
+                else if (existingUnassigned.Count < stillMissing)
+                {
+                    int toCreate = stillMissing - existingUnassigned.Count;
+                    for (int i = 0; i < toCreate; i++)
+                    {
+                        var placeholder = new ShiftAssignment
+                        {
+                            Date = date,
+                            EmployeeId = null,
+                            ShiftTypeId = shift.Id,
+                            Status = "Unassigned"
+                        };
+
+                        knownAssignments.Add(placeholder);
+                        newAssignments.Add(placeholder);
+                    }
+                }
             }
-
-            context.ShiftAssignments.AddRange(newAssignments);
-            await context.SaveChangesAsync();
-
-            return generatedCount;
         }
 
-        private bool CanAssign(Employee emp, DateOnly date, ShiftType newShift, List<ShiftAssignment> newlyGenerated, List<ShiftType> allShifts)
+        if (assignmentsToRemove.Count > 0)
         {
-            bool isUnavailable = emp.Availabilities.Any(a => a.StartDate <= date && a.EndDate >= date);
-            if (isUnavailable) return false;
-            
-            bool worksTodayDb = emp.ShiftAssignments.Any(sa => sa.Date == date);
-            bool worksTodayNew = newlyGenerated.Any(sa => sa.EmployeeId == emp.Id && sa.Date == date);
-            if (worksTodayDb || worksTodayNew) return false;
-
-            var yesterdayDate = date.AddDays(-1);
-            var yesterdayShiftId = emp.ShiftAssignments.FirstOrDefault(sa => sa.Date == yesterdayDate)?.ShiftTypeId 
-                                ?? newlyGenerated.FirstOrDefault(sa => sa.EmployeeId == emp.Id && sa.Date == yesterdayDate)?.ShiftTypeId;
-
-            if (yesterdayShiftId.HasValue)
-            {
-                var yesterdayShift = allShifts.FirstOrDefault(st => st.Id == yesterdayShiftId.Value);
-                if (yesterdayShift != null)
-                {
-                    double yesterdayEnd = yesterdayShift.EndTime.TotalHours;
-                    double todayStart = newShift.StartTime.TotalHours;
-                    if (yesterdayEnd < yesterdayShift.StartTime.TotalHours) yesterdayEnd += 24; 
-                    
-                    double hoursOfRest = (24 - yesterdayEnd) + todayStart;
-                    if (hoursOfRest < 12) return false; 
-                }
-            }
-
-
-            double blockHours = 0;
-            int recentOffDays = 0;
-            int internalOffDays = 0;
-            bool countingRecentOffs = true;
-            
-            for (int i = 1; i <= 30; i++) 
-            {
-                var checkDate = date.AddDays(-i);
-                
-                var dbShift = emp.ShiftAssignments.FirstOrDefault(sa => sa.Date == checkDate);
-                var newShiftMem = newlyGenerated.FirstOrDefault(sa => sa.EmployeeId == emp.Id && sa.Date == checkDate);
-                bool worked = dbShift != null || newShiftMem != null;
-
-                if (worked)
-                {
-                    countingRecentOffs = false;
-                    internalOffDays = 0; 
-                    
-                    int shiftId = dbShift?.ShiftTypeId ?? newShiftMem!.ShiftTypeId;
-                    var shiftDetails = allShifts.First(st => st.Id == shiftId);
-                    double duration = (shiftDetails.EndTime - shiftDetails.StartTime).TotalHours;
-                    if (duration < 0) duration += 24; 
-                    
-                    blockHours += duration;
-                }
-                else
-                {
-                    if (countingRecentOffs)
-                    {
-
-                        recentOffDays++;
-                        if (recentOffDays >= 2) break; 
-                    }
-                    else
-                    {
-                        internalOffDays++;
-                        if (internalOffDays >= 2) break; 
-                    }
-                }
-            }
-            
-            double newShiftDuration = (newShift.EndTime - newShift.StartTime).TotalHours;
-            if (newShiftDuration < 0) newShiftDuration += 24;
-
-            if (blockHours + newShiftDuration > emp.MaxHoursPerWeek)
-            {
-                return false;
-            }
-
-            return true; 
+            context.ShiftAssignments.RemoveRange(assignmentsToRemove);
         }
+
+        if (newAssignments.Count > 0)
+        {
+            context.ShiftAssignments.AddRange(newAssignments);
+        }
+
+        if (assignmentsToRemove.Count > 0 || newAssignments.Count > 0)
+        {
+            await context.SaveChangesAsync();
+        }
+
+        return generatedAssignedCount;
+    }
 }

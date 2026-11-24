@@ -24,12 +24,13 @@ import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
 import AdminPanelSettingsRoundedIcon from '@mui/icons-material/AdminPanelSettingsRounded';
 import BadgeRoundedIcon from '@mui/icons-material/BadgeRounded';
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
-
+import EventBusyRoundedIcon from '@mui/icons-material/EventBusyRounded';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Employees from './pages/Employees';
 import Schedule from './pages/Schedule';
 import ShiftTypes from './pages/ShiftTypes';
 import Positions from './pages/Positions';
+import Availabilities from './pages/Availabilities';
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
 
 
@@ -44,7 +45,9 @@ function Layout() {
         { text: 'Графіки', path: '/schedule', icon: <CalendarMonthRoundedIcon />, adminOnly: false },
         { text: 'Працівники', path: '/employees', icon: <PeopleAltRoundedIcon />, adminOnly: true },
         { text: 'Типи змін', path: '/shift-types', icon: <AccessTimeRoundedIcon />, adminOnly: true },
-        { text: 'Посади', path: '/positions', icon: <BadgeRoundedIcon />}
+        { text: 'Посади', path: '/positions', icon: <BadgeRoundedIcon />},
+        { text: 'Відсутність', path: '/availabilities', icon: <EventBusyRoundedIcon /> }
+        
     ];
 
     const menuItems = allMenuItems.filter((item) => !item.adminOnly || isAdmin);
@@ -112,8 +115,7 @@ function Layout() {
                             <PersonRoundedIcon fontSize="small" />
                         </Avatar>
                     </Box>
-
-                    {/* Меню профілю (перемикач ролей для тестування) */}
+                    
                     <Menu
                         anchorEl={profileAnchor}
                         open={Boolean(profileAnchor)}
@@ -251,6 +253,7 @@ function Layout() {
                         element={isAdmin ? <ShiftTypes /> : <Navigate to="/schedule" replace />}
                     />
                     <Route path="/positions" element={<Positions />} />
+                    <Route path="/availabilities" element={<Availabilities />} />
                 </Routes>
             </Container>
         </Box>

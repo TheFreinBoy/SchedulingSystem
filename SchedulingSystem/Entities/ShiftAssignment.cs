@@ -7,7 +7,7 @@ public class ShiftAssignment
     public int Id { get; set; }
     public DateOnly Date { get; set; }
         
-    public int EmployeeId { get; set; }
+    public int? EmployeeId { get; set; }
     public Employee? Employee { get; set; }
         
     public int ShiftTypeId { get; set; }

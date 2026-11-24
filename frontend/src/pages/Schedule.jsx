@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
-import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import {
     Typography,
@@ -10,22 +9,20 @@ import {
     CircularProgress,
     Button,
     IconButton,
-    Dialog,
-    DialogTitle,
-    DialogContent,
-    DialogActions,
-    TextField,
-    MenuItem,
     Alert,
-    Stack,
     Snackbar,
 } from '@mui/material';
-import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
-import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
-import DeleteSweepRoundedIcon from '@mui/icons-material/DeleteSweepRounded';
+import UnfoldMoreRoundedIcon from '@mui/icons-material/UnfoldMoreRounded';
+import UnfoldLessRoundedIcon from '@mui/icons-material/UnfoldLessRounded';
 import { useAuth } from '../context/AuthContext';
 import { apiFetch } from '../api/apiClient';
+import { buildPositionColorMap } from '../constants/uiStyles';
+import PositionFilterBar from '../components/common/PositionFilterBar';
+import ConfirmDialog from '../components/common/ConfirmDialog';
+import ScheduleToolbar from '../components/schedule/ScheduleToolbar';
+import ScheduleAuditDialog from '../components/schedule/ScheduleAuditDialog';
+import ShiftFormDialog from '../components/schedule/ShiftFormDialog';
 
 const getTodayStr = () => new Date().toISOString().split('T')[0];
 
@@ -38,12 +35,15 @@ const getPlusDaysStr = (days) => {
 export default function Schedule() {
     const { isAdmin } = useAuth();
 
-    const [events, setEvents] = useState([]);
+    const [rawAssignments, setRawAssignments] = useState([]);
+    const [positions, setPositions] = useState([]);
     const [employees, setEmployees] = useState([]);
     const [shiftTypes, setShiftTypes] = useState([]);
     const [loading, setLoading] = useState(true);
 
-    // Стан панелі автоматичної генерації / очищення
+    const [selectedPositionId, setSelectedPositionId] = useState('all');
+    const [expandAllInOverview, setExpandAllInOverview] = useState(false);
+
     const [genRange, setGenRange] = useState({
         startDate: getTodayStr(),
         endDate: getPlusDaysStr(7),
@@ -53,61 +53,35 @@ export default function Schedule() {
     const [confirmClearDialog, setConfirmClearDialog] = useState(false);
     const [toast, setToast] = useState({ open: false, message: '', severity: 'success' });
 
-    // Швидке видалення з плашки календаря
+    const [validating, setValidating] = useState(false);
+    const [auditDialogOpen, setAuditDialogOpen] = useState(false);
+    const [auditReport, setAuditReport] = useState(null);
+
     const [quickDeleteTarget, setQuickDeleteTarget] = useState(null);
 
-    // Стан модального вікна призначення / редагування
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editingShift, setEditingShift] = useState(null);
-    const [confirmDelete, setConfirmDelete] = useState(false);
-    const [formData, setFormData] = useState({
-        date: '',
-        employeeId: '',
-        shiftTypeId: '',
-    });
+    const [formData, setFormData] = useState({ date: '', employeeId: '', shiftTypeId: '' });
     const [errorMsg, setErrorMsg] = useState('');
     const [saving, setSaving] = useState(false);
 
     const fetchAllData = async () => {
         try {
-            const requests = [apiFetch('/ShiftAssignments')];
+            const requests = [
+                apiFetch('/ShiftAssignments'),
+                apiFetch('/Positions'),
+                apiFetch('/ShiftTypes'),
+            ];
             if (isAdmin) {
-                requests.push(apiFetch('/Employees'), apiFetch('/ShiftTypes'));
+                requests.push(apiFetch('/Employees'));
             }
 
-            const [schedRes, empRes, typesRes] = await Promise.all(requests);
+            const [schedRes, posRes, typesRes, empRes] = await Promise.all(requests);
 
-            const schedData = await schedRes.json();
-            if (Array.isArray(schedData)) {
-                const formattedEvents = schedData.map((shift) => {
-                    const isUnassigned = shift.status === 'Unassigned';
-                    return {
-                        id: String(shift.id),
-                        title: isUnassigned ? 'Непризначено' : shift.employeeFullName,
-                        start: shift.date,
-                        allDay: true,
-                        extendedProps: {
-                            shiftType: shift.shiftTypeName,
-                            shiftTypeShortCode: shift.shiftTypeShortCode,
-                            isUnassigned,
-                            employeeId: shift.employeeId,
-                            shiftTypeId: shift.shiftTypeId,
-                            rawDate: shift.date,
-                        },
-                    };
-                });
-                setEvents(formattedEvents);
-            }
-
-            if (isAdmin && empRes?.ok) {
-                const empData = await empRes.json();
-                setEmployees(Array.isArray(empData) ? empData : []);
-            }
-
-            if (isAdmin && typesRes?.ok) {
-                const typesData = await typesRes.json();
-                setShiftTypes(Array.isArray(typesData) ? typesData : []);
-            }
+            if (schedRes?.ok) setRawAssignments(await schedRes.json());
+            if (posRes?.ok) setPositions(await posRes.json());
+            if (typesRes?.ok) setShiftTypes(await typesRes.json());
+            if (isAdmin && empRes?.ok) setEmployees(await empRes.json());
         } catch (error) {
             console.error('Помилка завантаження даних:', error);
         } finally {
@@ -119,17 +93,73 @@ export default function Schedule() {
         fetchAllData();
     }, [isAdmin]);
 
+    const positionColorMap = useMemo(() => buildPositionColorMap(positions), [positions]);
+
+    const shiftTypeMap = useMemo(() => {
+        const map = {};
+        shiftTypes.forEach((st) => {
+            map[st.id] = st;
+        });
+        return map;
+    }, [shiftTypes]);
+
+    const enrichedEvents = useMemo(() => {
+        return rawAssignments.map((shift) => {
+            const isUnassigned = shift.status === 'Unassigned' || !shift.employeeId;
+            const stInfo = shiftTypeMap[shift.shiftTypeId];
+            return {
+                id: String(shift.id),
+                title: isUnassigned ? 'Непризначено' : shift.employeeFullName,
+                start: shift.date,
+                allDay: true,
+                extendedProps: {
+                    shiftType: shift.shiftTypeName,
+                    shiftTypeShortCode: shift.shiftTypeShortCode,
+                    isUnassigned,
+                    employeeId: shift.employeeId ?? '',
+                    shiftTypeId: shift.shiftTypeId,
+                    rawDate: shift.date,
+                    positionId: stInfo?.positionId ?? null,
+                    positionName: stInfo?.positionName ?? '',
+                },
+            };
+        });
+    }, [rawAssignments, shiftTypeMap]);
+
+    const filteredEvents = useMemo(() => {
+        if (selectedPositionId === 'all') return enrichedEvents;
+        return enrichedEvents.filter(
+            (ev) => ev.extendedProps.positionId === Number(selectedPositionId)
+        );
+    }, [enrichedEvents, selectedPositionId]);
+
+    const positionCounts = useMemo(() => {
+        const counts = { all: enrichedEvents.length };
+        positions.forEach((p) => {
+            counts[p.id] = 0;
+        });
+        enrichedEvents.forEach((ev) => {
+            const pid = ev.extendedProps.positionId;
+            if (pid != null && counts[pid] !== undefined) counts[pid] += 1;
+        });
+        return counts;
+    }, [enrichedEvents, positions]);
+
+    const selectedPosition = useMemo(() => {
+        if (selectedPositionId === 'all') return null;
+        return positions.find((p) => p.id === Number(selectedPositionId)) || null;
+    }, [positions, selectedPositionId]);
+
+    const validateRange = () => {
+        if (!genRange.startDate || !genRange.endDate || genRange.startDate > genRange.endDate) {
+            setToast({ open: true, message: 'Вкажіть коректний діапазон дат.', severity: 'error' });
+            return false;
+        }
+        return true;
+    };
+
     const handleGenerateSchedule = async () => {
-        if (!genRange.startDate || !genRange.endDate) {
-            setToast({ open: true, message: 'Вкажіть початкову та кінцеву дати.', severity: 'error' });
-            return;
-        }
-
-        if (genRange.startDate > genRange.endDate) {
-            setToast({ open: true, message: 'Початкова дата не може бути пізнішою за кінцеву.', severity: 'error' });
-            return;
-        }
-
+        if (!validateRange()) return;
         setGenerating(true);
         try {
             const response = await apiFetch('/ShiftAssignments/Generate', {
@@ -137,68 +167,115 @@ export default function Schedule() {
                 body: JSON.stringify({
                     startDate: genRange.startDate,
                     endDate: genRange.endDate,
+                    positionId: selectedPosition ? selectedPosition.id : null,
                 }),
             });
 
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || 'Помилка генерації розкладу');
-            }
+            if (!response.ok) throw new Error((await response.text()) || 'Помилка генерації розкладу');
 
             const data = await response.json();
             await fetchAllData();
-
             setToast({
                 open: true,
                 message: data.message || data.Message || 'Розклад успішно згенеровано!',
                 severity: 'success',
             });
         } catch (err) {
-            setToast({
-                open: true,
-                message: err.message || 'Не вдалося згенерувати розклад',
-                severity: 'error',
-            });
+            setToast({ open: true, message: err.message, severity: 'error' });
         } finally {
             setGenerating(false);
         }
     };
 
+    const handleValidateSchedule = async () => {
+        if (!validateRange()) return;
+        setValidating(true);
+        try {
+            const posParam = selectedPosition ? `&positionId=${selectedPosition.id}` : '';
+            const response = await apiFetch(
+                `/ShiftAssignments/Validate?startDate=${genRange.startDate}&endDate=${genRange.endDate}${posParam}`
+            );
+
+            if (!response.ok) throw new Error((await response.text()) || 'Не вдалося перевірити графік');
+
+            setAuditReport(await response.json());
+            setAuditDialogOpen(true);
+        } catch (err) {
+            setToast({ open: true, message: err.message, severity: 'error' });
+        } finally {
+            setValidating(false);
+        }
+    };
+
     const handleClearRange = async () => {
         setConfirmClearDialog(false);
-        if (!genRange.startDate || !genRange.endDate || genRange.startDate > genRange.endDate) {
-            setToast({ open: true, message: 'Вкажіть коректний діапазон дат.', severity: 'error' });
-            return;
-        }
-
+        if (!validateRange()) return;
         setClearingRange(true);
         try {
-            const query = `?startDate=${genRange.startDate}&endDate=${genRange.endDate}`;
-            const response = await apiFetch(`/ShiftAssignments/Range${query}`, {
-                method: 'DELETE',
-            });
+            const posParam = selectedPosition ? `&positionId=${selectedPosition.id}` : '';
+            const response = await apiFetch(
+                `/ShiftAssignments/Range?startDate=${genRange.startDate}&endDate=${genRange.endDate}${posParam}`,
+                { method: 'DELETE' }
+            );
 
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || 'Помилка очищення періоду');
-            }
+            if (!response.ok) throw new Error((await response.text()) || 'Помилка очищення періоду');
 
             const data = await response.json();
             await fetchAllData();
-
             setToast({
                 open: true,
                 message: data.message || data.Message || 'Зміни за період видалено.',
                 severity: 'success',
             });
         } catch (err) {
-            setToast({
-                open: true,
-                message: err.message || 'Не вдалося видалити зміни',
-                severity: 'error',
-            });
+            setToast({ open: true, message: err.message, severity: 'error' });
         } finally {
             setClearingRange(false);
+        }
+    };
+
+    const handleEventDrop = async (dropInfo) => {
+        if (!isAdmin) {
+            dropInfo.revert();
+            return;
+        }
+
+        const { id, extendedProps } = dropInfo.event;
+        const newDate = dropInfo.event.startStr.slice(0, 10);
+        if (!newDate || newDate === extendedProps.rawDate) return;
+
+        try {
+            const response = await apiFetch(`/ShiftAssignments/${id}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                    date: newDate,
+                    employeeId: extendedProps.employeeId ? Number(extendedProps.employeeId) : null,
+                    shiftTypeId: Number(extendedProps.shiftTypeId),
+                }),
+            });
+
+            if (!response.ok) {
+                dropInfo.revert();
+                setToast({
+                    open: true,
+                    message: (await response.text()) || 'Не вдалося перенести зміну на цю дату.',
+                    severity: 'error',
+                });
+                return;
+            }
+
+            const data = await response.json().catch(() => ({}));
+            await fetchAllData();
+
+            const warningMsg = data.warning || data.Warning;
+            setToast({
+                open: true,
+                message: warningMsg || `Зміну перенесено на ${newDate}.`,
+                severity: warningMsg ? 'warning' : 'success',
+            });
+        } catch (err) {
+            dropInfo.revert();
+            setToast({ open: true, message: err.message || 'Помилка перенесення зміни.', severity: 'error' });
         }
     };
 
@@ -209,9 +286,7 @@ export default function Schedule() {
             const response = await apiFetch(`/ShiftAssignments/${quickDeleteTarget.id}`, {
                 method: 'DELETE',
             });
-            if (!response.ok) {
-                throw new Error('Помилка видалення зміни');
-            }
+            if (!response.ok) throw new Error('Помилка видалення зміни');
             await fetchAllData();
             setToast({ open: true, message: 'Зміну видалено.', severity: 'success' });
         } catch (err) {
@@ -222,70 +297,61 @@ export default function Schedule() {
         }
     };
 
-    const openCreateModal = (selectedDate = '') => {
-        if (!isAdmin) return;
-        const activeEmployees = employees.filter((e) => e.isActive !== false);
-        setEditingShift(null);
-        setConfirmDelete(false);
-        setErrorMsg('');
-        setFormData({
-            date: selectedDate || getTodayStr(),
-            employeeId: activeEmployees.length > 0 ? activeEmployees[0].id : '',
-            shiftTypeId: shiftTypes.length > 0 ? shiftTypes[0].id : '',
-        });
-        setDialogOpen(true);
-    };
-
     const handleDateClick = (arg) => {
         if (!isAdmin) return;
-        openCreateModal(arg.dateStr);
+        const activeEmployees = employees.filter((e) => e.isActive !== false);
+        const preferredEmployees = selectedPosition
+            ? activeEmployees.filter((e) => e.positionId === selectedPosition.id)
+            : activeEmployees;
+        const preferredShifts = selectedPosition
+            ? shiftTypes.filter((st) => st.positionId === selectedPosition.id)
+            : shiftTypes;
+
+        setEditingShift(null);
+        setErrorMsg('');
+        setFormData({
+            date: arg.dateStr || getTodayStr(),
+            employeeId: (preferredEmployees[0] ?? activeEmployees[0])?.id ?? '',
+            shiftTypeId: (preferredShifts[0] ?? shiftTypes[0])?.id ?? '',
+        });
+        setDialogOpen(true);
     };
 
     const handleEventClick = (clickInfo) => {
         if (!isAdmin) return;
         const { id, extendedProps } = clickInfo.event;
-        const activeEmployees = employees.filter((e) => e.isActive !== false);
         setEditingShift({ id });
-        setConfirmDelete(false);
         setErrorMsg('');
         setFormData({
             date: extendedProps.rawDate,
-            employeeId: extendedProps.employeeId || (activeEmployees[0]?.id ?? ''),
+            employeeId: extendedProps.employeeId || '',
             shiftTypeId: extendedProps.shiftTypeId || (shiftTypes[0]?.id ?? ''),
         });
         setDialogOpen(true);
     };
 
     const handleSaveShift = async () => {
-        if (!formData.date || !formData.employeeId || !formData.shiftTypeId) {
-            setErrorMsg('Оберіть дату, працівника та тип зміни.');
+        if (!formData.date || !formData.shiftTypeId) {
+            setErrorMsg('Оберіть дату та тип зміни.');
             return;
         }
 
         setSaving(true);
         setErrorMsg('');
-
-        const payload = {
-            date: formData.date,
-            employeeId: Number(formData.employeeId),
-            shiftTypeId: Number(formData.shiftTypeId),
-        };
-
         try {
-            const endpoint = editingShift
-                ? `/ShiftAssignments/${editingShift.id}`
-                : '/ShiftAssignments/Assign';
-            const method = editingShift ? 'PUT' : 'POST';
+            const response = await apiFetch(
+                editingShift ? `/ShiftAssignments/${editingShift.id}` : '/ShiftAssignments/Assign',
+                {
+                    method: editingShift ? 'PUT' : 'POST',
+                    body: JSON.stringify({
+                        date: formData.date,
+                        employeeId: formData.employeeId ? Number(formData.employeeId) : null,
+                        shiftTypeId: Number(formData.shiftTypeId),
+                    }),
+                }
+            );
 
-            const response = await apiFetch(endpoint, {
-                method,
-                body: JSON.stringify(payload),
-            });
-
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || 'Не вдалося зберегти зміну');
-            }
+            if (!response.ok) throw new Error((await response.text()) || 'Не вдалося зберегти зміну');
 
             const data = await response.json().catch(() => ({}));
             await fetchAllData();
@@ -293,11 +359,7 @@ export default function Schedule() {
 
             const warningMsg = data.warning || data.Warning;
             if (warningMsg) {
-                setToast({
-                    open: true,
-                    message: warningMsg,
-                    severity: 'warning',
-                });
+                setToast({ open: true, message: warningMsg, severity: 'warning' });
             }
         } catch (err) {
             setErrorMsg(err.message);
@@ -313,9 +375,7 @@ export default function Schedule() {
             const response = await apiFetch(`/ShiftAssignments/${editingShift.id}`, {
                 method: 'DELETE',
             });
-            if (!response.ok) {
-                throw new Error('Помилка видалення зміни');
-            }
+            if (!response.ok) throw new Error('Помилка видалення зміни');
             await fetchAllData();
             setDialogOpen(false);
             setToast({ open: true, message: 'Зміну видалено.', severity: 'success' });
@@ -327,9 +387,18 @@ export default function Schedule() {
     };
 
     const renderEventContent = (eventInfo) => {
-        const { shiftType, shiftTypeShortCode, isUnassigned, rawDate } = eventInfo.event.extendedProps;
-        const accentColor = isUnassigned ? '#F87171' : '#38BDF8';
-        const bgColor = isUnassigned ? 'rgba(248, 113, 113, 0.14)' : 'rgba(56, 189, 248, 0.14)';
+        const {
+            shiftType,
+            shiftTypeShortCode,
+            isUnassigned,
+            rawDate,
+            positionId,
+            positionName,
+        } = eventInfo.event.extendedProps;
+
+        const palette = positionId ? positionColorMap[positionId] : null;
+        const accentColor = isUnassigned ? '#F87171' : palette?.accent || '#38BDF8';
+        const bgColor = isUnassigned ? 'rgba(248, 113, 113, 0.14)' : palette?.bg || 'rgba(56, 189, 248, 0.14)';
         const shortShiftType = shiftTypeShortCode || (shiftType ? shiftType.charAt(0).toUpperCase() : '');
 
         return (
@@ -338,40 +407,31 @@ export default function Schedule() {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    gap: 0.8,
+                    gap: 0.5,
                     bgcolor: bgColor,
-                    borderLeft: `4px solid ${accentColor}`,
+                    borderLeft: `3.5px solid ${accentColor}`,
                     borderRadius: '4px',
-                    px: 1.2,
-                    py: 0.65,
+                    px: 0.9,
+                    py: 0.35,
                     overflow: 'hidden',
-                    cursor: isAdmin ? 'pointer' : 'default',
+                    cursor: isAdmin ? 'grab' : 'default',
                     transition: '0.15s',
-                    '&:hover .quick-delete-btn': {
-                        opacity: 1,
-                    },
-                    ...(isAdmin && {
-                        '&:hover': { filter: 'brightness(1.2)' },
-                    }),
+                    '&:hover .quick-delete-btn': { opacity: 1 },
+                    ...(isAdmin && { '&:hover': { filter: 'brightness(1.2)' } }),
                 }}
             >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, overflow: 'hidden' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, overflow: 'hidden', minWidth: 0 }}>
                     <Typography
                         component="span"
-                        sx={{
-                            fontSize: '0.85rem',
-                            fontWeight: 800,
-                            color: accentColor,
-                            whiteSpace: 'nowrap',
-                        }}
+                        sx={{ fontSize: '0.76rem', fontWeight: 800, color: accentColor, whiteSpace: 'nowrap' }}
                     >
                         {shortShiftType}
                     </Typography>
                     <Typography
                         component="span"
                         sx={{
-                            fontSize: '0.8rem',
-                            fontWeight: 500,
+                            fontSize: '0.76rem',
+                            fontWeight: 600,
                             color: '#F3F3F3',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
@@ -380,6 +440,20 @@ export default function Schedule() {
                     >
                         {eventInfo.event.title}
                     </Typography>
+                    {selectedPositionId === 'all' && positionName && (
+                        <Typography
+                            component="span"
+                            sx={{
+                                fontSize: '0.66rem',
+                                fontWeight: 600,
+                                color: '#989898',
+                                whiteSpace: 'nowrap',
+                                display: { xs: 'none', xl: 'inline' },
+                            }}
+                        >
+                            · {positionName}
+                        </Typography>
+                    )}
                 </Box>
 
                 {isAdmin && (
@@ -397,169 +471,90 @@ export default function Schedule() {
                             });
                         }}
                         sx={{
-                            p: 0.2,
+                            p: 0.15,
                             opacity: 0,
                             color: '#989898',
                             transition: 'opacity 0.15s, color 0.15s',
-                            '&:hover': {
-                                color: '#F87171',
-                                bgcolor: 'rgba(248, 113, 113, 0.15)',
-                            },
+                            '&:hover': { color: '#F87171', bgcolor: 'rgba(248, 113, 113, 0.15)' },
                         }}
                     >
-                        <CloseRoundedIcon sx={{ fontSize: 15 }} />
+                        <CloseRoundedIcon sx={{ fontSize: 14 }} />
                     </IconButton>
                 )}
             </Box>
         );
     };
 
-    const selectableEmployees = employees.filter(
-        (emp) => emp.isActive !== false || emp.id === Number(formData.employeeId)
-    );
+    const selectableEmployees = employees.filter((emp) => {
+        if (emp.id === Number(formData.employeeId)) return true;
+        if (emp.isActive === false) return false;
+        return selectedPosition ? emp.positionId === selectedPosition.id : true;
+    });
 
-    const inputSx = {
-        '& .MuiOutlinedInput-root': {
-            bgcolor: '#1D1A1A',
-            borderRadius: '10px',
-            colorScheme: 'dark',
-            '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.1)' },
-            '&:hover fieldset': { borderColor: 'rgba(255, 255, 255, 0.25)' },
-            '&.Mui-focused fieldset': { borderColor: '#B4F82C' },
-        },
-        '& .MuiInputLabel-root.Mui-focused': { color: '#B4F82C' },
-    };
+    const selectableShiftTypes = shiftTypes.filter((st) => {
+        if (st.id === Number(formData.shiftTypeId)) return true;
+        return selectedPosition ? st.positionId === selectedPosition.id : true;
+    });
 
-    const dialogPaperSlotProps = {
-        paper: {
-            sx: {
-                bgcolor: '#222222',
-                borderRadius: '16px',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-            },
-        },
-    };
+    const effectiveDayMaxEvents = selectedPositionId !== 'all' ? false : expandAllInOverview ? false : 4;
 
     return (
         <Box sx={{ pb: 4 }}>
-            <Box sx={{ mb: 3 }}>
+            <Box sx={{ mb: 2.5 }}>
                 <Typography variant="h4" sx={{ color: 'text.primary', mb: 0.5 }}>
                     Графік роботи
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                     {isAdmin
-                        ? 'Натисніть на день для призначення, на зміну для редагування або на хрестик для видалення'
-                        : 'Перегляд актуального розкладу змін'}
+                        ? 'Натисніть на день для призначення, перетягніть зміну для переносу або натисніть на неї для редагування'
+                        : 'Перегляд актуального розкладу змін за підрозділами'}
                 </Typography>
             </Box>
 
             {isAdmin && (
-                <Paper
-                    elevation={0}
-                    sx={{
-                        p: 2.5,
-                        mb: 2.5,
-                        borderRadius: '16px',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: { xs: 'stretch', lg: 'center' },
-                        flexDirection: { xs: 'column', lg: 'row' },
-                        gap: 2,
-                    }}
-                >
-                    <Box>
-                        <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#F3F3F3' }}>
-                            Керування розкладом за період
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                            Автоматичний розподіл персоналу або очищення змін у вибраному діапазоні
-                        </Typography>
-                    </Box>
-
-                    <Stack
-                        direction={{ xs: 'column', sm: 'row' }}
-                        spacing={1.5}
-                        sx={{ alignItems: { xs: 'stretch', sm: 'center' } }}
-                    >
-                        <TextField
-                            label="Початкова дата"
-                            type="date"
-                            size="small"
-                            slotProps={{ inputLabel: { shrink: true } }}
-                            value={genRange.startDate}
-                            onChange={(e) => setGenRange((prev) => ({ ...prev, startDate: e.target.value }))}
-                            sx={{ ...inputSx, minWidth: 165 }}
-                        />
-                        <TextField
-                            label="Кінцева дата"
-                            type="date"
-                            size="small"
-                            slotProps={{ inputLabel: { shrink: true } }}
-                            value={genRange.endDate}
-                            onChange={(e) => setGenRange((prev) => ({ ...prev, endDate: e.target.value }))}
-                            sx={{ ...inputSx, minWidth: 165 }}
-                        />
-                        <Button
-                            variant="contained"
-                            startIcon={
-                                generating ? (
-                                    <CircularProgress size={18} sx={{ color: '#181515' }} />
-                                ) : (
-                                    <AutoAwesomeRoundedIcon />
-                                )
-                            }
-                            onClick={handleGenerateSchedule}
-                            disabled={generating || clearingRange}
-                            sx={{
-                                bgcolor: '#B4F82C',
-                                color: '#181515',
-                                fontWeight: 700,
-                                px: 2.5,
-                                py: 1,
-                                borderRadius: '10px',
-                                whiteSpace: 'nowrap',
-                                '&:hover': { bgcolor: '#a3e61e' },
-                                '&.Mui-disabled': {
-                                    bgcolor: 'rgba(180, 248, 44, 0.35)',
-                                    color: '#181515',
-                                },
-                            }}
-                        >
-                            {generating ? 'Генерація...' : 'Згенерувати'}
-                        </Button>
-                        <Button
-                            variant="outlined"
-                            startIcon={
-                                clearingRange ? (
-                                    <CircularProgress size={18} sx={{ color: '#F87171' }} />
-                                ) : (
-                                    <DeleteSweepRoundedIcon />
-                                )
-                            }
-                            onClick={(e) => {
-                                e.currentTarget.blur();
-                                setConfirmClearDialog(true);
-                            }}
-                            disabled={generating || clearingRange}
-                            sx={{
-                                borderColor: 'rgba(248, 113, 113, 0.4)',
-                                color: '#F87171',
-                                fontWeight: 700,
-                                px: 2,
-                                py: 0.9,
-                                borderRadius: '10px',
-                                whiteSpace: 'nowrap',
-                                '&:hover': {
-                                    borderColor: '#F87171',
-                                    bgcolor: 'rgba(248, 113, 113, 0.1)',
-                                },
-                            }}
-                        >
-                            {clearingRange ? 'Очищення...' : 'Очистити'}
-                        </Button>
-                    </Stack>
-                </Paper>
+                <ScheduleToolbar
+                    genRange={genRange}
+                    onChangeRange={(field, value) => setGenRange((prev) => ({ ...prev, [field]: value }))}
+                    selectedPosition={selectedPosition}
+                    generating={generating}
+                    validating={validating}
+                    clearingRange={clearingRange}
+                    onGenerate={handleGenerateSchedule}
+                    onValidate={handleValidateSchedule}
+                    onOpenClearConfirm={() => setConfirmClearDialog(true)}
+                />
             )}
+
+            <PositionFilterBar
+                positions={positions}
+                counts={positionCounts}
+                selectedPositionId={selectedPositionId}
+                onSelectPosition={setSelectedPositionId}
+                positionColorMap={positionColorMap}
+                rightContent={
+                    selectedPositionId === 'all' && (
+                        <Button
+                            size="small"
+                            startIcon={expandAllInOverview ? <UnfoldLessRoundedIcon /> : <UnfoldMoreRoundedIcon />}
+                            onClick={() => setExpandAllInOverview((prev) => !prev)}
+                            sx={{
+                                color: expandAllInOverview ? '#B4F82C' : '#989898',
+                                bgcolor: '#1D1A1A',
+                                border: '1px solid rgba(255, 255, 255, 0.08)',
+                                borderRadius: '8px',
+                                px: 1.5,
+                                py: 0.5,
+                                fontWeight: 600,
+                                whiteSpace: 'nowrap',
+                                alignSelf: { xs: 'flex-start', lg: 'center' },
+                                '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.08)', color: '#F3F3F3' },
+                            }}
+                        >
+                            {expandAllInOverview ? 'Згорнути (до 4)' : 'Показати всіх у дні'}
+                        </Button>
+                    )
+                }
+            />
 
             {loading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}>
@@ -571,215 +566,94 @@ export default function Schedule() {
                     sx={{
                         p: { xs: 1.5, md: 3 },
                         borderRadius: '16px',
-                        height: '78vh',
+                        minHeight: '76vh',
+                        '& .fc': {
+                            height: effectiveDayMaxEvents === false ? 'auto !important' : '72vh',
+                        },
                     }}
                 >
                     <FullCalendar
-                        plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+                        plugins={[dayGridPlugin, interactionPlugin]}
                         initialView="dayGridMonth"
                         headerToolbar={{
                             left: 'prev,next today',
                             center: 'title',
-                            right: 'dayGridMonth,timeGridWeek',
+                            right: 'dayGridMonth,dayGridWeek',
                         }}
-                        buttonText={{
-                            today: 'Сьогодні',
-                            month: 'Місяць',
-                            week: 'Тиждень',
-                        }}
-                        events={events}
+                        buttonText={{ today: 'Сьогодні', month: 'Місяць', week: 'Тиждень' }}
+                        events={filteredEvents}
                         locale="uk"
-                        height="100%"
+                        height={effectiveDayMaxEvents === false ? 'auto' : '72vh'}
                         eventContent={renderEventContent}
                         dateClick={isAdmin ? handleDateClick : undefined}
                         eventClick={isAdmin ? handleEventClick : undefined}
-                        dayMaxEvents={3}
+                        editable={isAdmin}
+                        eventDurationEditable={false}
+                        eventDrop={isAdmin ? handleEventDrop : undefined}
+                        dayMaxEvents={effectiveDayMaxEvents}
                     />
                 </Paper>
             )}
 
-            {/* Підтвердження швидкого видалення однієї зміни з плашки */}
+            <ScheduleAuditDialog
+                open={auditDialogOpen}
+                onClose={() => setAuditDialogOpen(false)}
+                report={auditReport}
+                selectedPosition={selectedPosition}
+            />
+
             {isAdmin && (
-                <Dialog
-                    open={Boolean(quickDeleteTarget)}
-                    onClose={() => setQuickDeleteTarget(null)}
-                    slotProps={dialogPaperSlotProps}
-                >
-                    <DialogTitle sx={{ fontWeight: 700 }}>Видалити зміну?</DialogTitle>
-                    <DialogContent>
-                        <Typography color="text.secondary">
-                            Видалити зміну <strong style={{ color: '#F3F3F3' }}>{quickDeleteTarget?.shiftType}</strong> для{' '}
-                            <strong style={{ color: '#F3F3F3' }}>{quickDeleteTarget?.title}</strong> на{' '}
-                            <strong style={{ color: '#F3F3F3' }}>{quickDeleteTarget?.date}</strong>?
-                        </Typography>
-                    </DialogContent>
-                    <DialogActions sx={{ px: 3, pb: 2 }}>
-                        <Button onClick={() => setQuickDeleteTarget(null)} sx={{ color: '#989898' }}>
-                            Скасувати
-                        </Button>
-                        <Button
-                            variant="contained"
-                            onClick={handleQuickDeleteConfirm}
-                            disabled={saving}
-                            sx={{
-                                bgcolor: '#F87171',
-                                color: '#181515',
-                                fontWeight: 700,
-                                '&:hover': { bgcolor: '#ef4444' },
-                            }}
-                        >
-                            Видалити
-                        </Button>
-                    </DialogActions>
-                </Dialog>
-            )}
+                <>
+                    <ConfirmDialog
+                        open={Boolean(quickDeleteTarget)}
+                        title="Видалити зміну?"
+                        confirmText="Видалити"
+                        loading={saving}
+                        onConfirm={handleQuickDeleteConfirm}
+                        onClose={() => setQuickDeleteTarget(null)}
+                    >
+                        Видалити зміну <strong style={{ color: '#F3F3F3' }}>{quickDeleteTarget?.shiftType}</strong> для{' '}
+                        <strong style={{ color: '#F3F3F3' }}>{quickDeleteTarget?.title}</strong> на{' '}
+                        <strong style={{ color: '#F3F3F3' }}>{quickDeleteTarget?.date}</strong>?
+                    </ConfirmDialog>
 
-            {/* Підтвердження очищення періоду */}
-            {isAdmin && (
-                <Dialog
-                    open={confirmClearDialog}
-                    onClose={() => setConfirmClearDialog(false)}
-                    slotProps={dialogPaperSlotProps}
-                >
-                    <DialogTitle sx={{ fontWeight: 700 }}>Очистити розклад за період?</DialogTitle>
-                    <DialogContent>
-                        <Typography color="text.secondary">
-                            Усі призначені зміни з <strong style={{ color: '#F3F3F3' }}>{genRange.startDate}</strong> по{' '}
-                            <strong style={{ color: '#F3F3F3' }}>{genRange.endDate}</strong> будуть видалені. Цю дію
-                            неможливо скасувати.
-                        </Typography>
-                    </DialogContent>
-                    <DialogActions sx={{ px: 3, pb: 2 }}>
-                        <Button onClick={() => setConfirmClearDialog(false)} sx={{ color: '#989898' }}>
-                            Скасувати
-                        </Button>
-                        <Button
-                            variant="contained"
-                            onClick={handleClearRange}
-                            sx={{
-                                bgcolor: '#F87171',
-                                color: '#181515',
-                                fontWeight: 700,
-                                '&:hover': { bgcolor: '#ef4444' },
-                            }}
-                        >
-                            Очистити все
-                        </Button>
-                    </DialogActions>
-                </Dialog>
-            )}
-
-            {/* Модальне вікно призначення / редагування / видалення зміни */}
-            {isAdmin && (
-                <Dialog
-                    open={dialogOpen}
-                    onClose={() => setDialogOpen(false)}
-                    maxWidth="xs"
-                    fullWidth
-                    slotProps={dialogPaperSlotProps}
-                >
-                    <DialogTitle sx={{ fontWeight: 700, pb: 1 }}>
-                        {editingShift ? 'Редагувати зміну' : 'Призначити зміну'}
-                    </DialogTitle>
-
-                    <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '12px !important' }}>
-                        {errorMsg && (
-                            <Alert severity="error" sx={{ borderRadius: '10px' }}>
-                                {errorMsg}
-                            </Alert>
-                        )}
-
-                        <TextField
-                            label="Дата"
-                            type="date"
-                            fullWidth
-                            slotProps={{ inputLabel: { shrink: true } }}
-                            value={formData.date}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, date: e.target.value }))}
-                            sx={inputSx}
-                        />
-
-                        <TextField
-                            select
-                            label="Працівник"
-                            fullWidth
-                            value={formData.employeeId}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, employeeId: e.target.value }))}
-                            sx={inputSx}
-                        >
-                            {selectableEmployees.map((emp) => (
-                                <MenuItem key={emp.id} value={emp.id}>
-                                    {[emp.lastName, emp.firstName, emp.middleName].filter(Boolean).join(' ')} ({emp.positionName})
-                                </MenuItem>
-                            ))}
-                        </TextField>
-
-                        <TextField
-                            select
-                            label="Тип зміни"
-                            fullWidth
-                            value={formData.shiftTypeId}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, shiftTypeId: e.target.value }))}
-                            sx={inputSx}
-                        >
-                            {shiftTypes.map((st) => (
-                                <MenuItem key={st.id} value={st.id}>
-                                    [{st.shortCode || st.name.charAt(0).toUpperCase()}] {st.name} ({st.startTime?.slice(0, 5)} – {st.endTime?.slice(0, 5)})
-                                </MenuItem>
-                            ))}
-                        </TextField>
-                    </DialogContent>
-
-                    <DialogActions sx={{ px: 3, pb: 2.5, justifyContent: 'space-between' }}>
-                        {editingShift ? (
-                            confirmDelete ? (
-                                <Button
-                                    variant="contained"
-                                    onClick={handleDeleteShift}
-                                    disabled={saving}
-                                    sx={{
-                                        bgcolor: '#F87171',
-                                        color: '#181515',
-                                        fontWeight: 700,
-                                        '&:hover': { bgcolor: '#ef4444' },
-                                    }}
-                                >
-                                    Підтвердити видалення
-                                </Button>
-                            ) : (
-                                <Button
-                                    startIcon={<DeleteOutlineRoundedIcon />}
-                                    onClick={() => setConfirmDelete(true)}
-                                    sx={{ color: '#F87171' }}
-                                >
-                                    Видалити
-                                </Button>
-                            )
+                    <ConfirmDialog
+                        open={confirmClearDialog}
+                        title="Очистити розклад за період?"
+                        confirmText="Очистити все"
+                        onConfirm={handleClearRange}
+                        onClose={() => setConfirmClearDialog(false)}
+                    >
+                        {selectedPosition ? (
+                            <>
+                                Усі зміни для посади <strong style={{ color: '#F3F3F3' }}>{selectedPosition.name}</strong> з{' '}
+                                <strong style={{ color: '#F3F3F3' }}>{genRange.startDate}</strong> по{' '}
+                                <strong style={{ color: '#F3F3F3' }}>{genRange.endDate}</strong> будуть видалені.
+                            </>
                         ) : (
-                            <Box />
-                        )}
+                            <>
+                                Усі призначені зміни (для всіх посад) з{' '}
+                                <strong style={{ color: '#F3F3F3' }}>{genRange.startDate}</strong> по{' '}
+                                <strong style={{ color: '#F3F3F3' }}>{genRange.endDate}</strong> будуть видалені.
+                            </>
+                        )}{' '}
+                        Цю дію неможливо скасувати.
+                    </ConfirmDialog>
 
-                        <Box sx={{ display: 'flex', gap: 1 }}>
-                            <Button onClick={() => setDialogOpen(false)} sx={{ color: '#989898' }}>
-                                Скасувати
-                            </Button>
-                            <Button
-                                variant="contained"
-                                onClick={handleSaveShift}
-                                disabled={saving}
-                                sx={{
-                                    bgcolor: '#B4F82C',
-                                    color: '#181515',
-                                    fontWeight: 700,
-                                    px: 2.5,
-                                    '&:hover': { bgcolor: '#a3e61e' },
-                                }}
-                            >
-                                {saving ? 'Збереження...' : 'Зберегти'}
-                            </Button>
-                        </Box>
-                    </DialogActions>
-                </Dialog>
+                    <ShiftFormDialog
+                        open={dialogOpen}
+                        onClose={() => setDialogOpen(false)}
+                        editingShift={editingShift}
+                        formData={formData}
+                        onChangeForm={(field, value) => setFormData((prev) => ({ ...prev, [field]: value }))}
+                        employees={selectableEmployees}
+                        shiftTypes={selectableShiftTypes}
+                        errorMsg={errorMsg}
+                        saving={saving}
+                        onSave={handleSaveShift}
+                        onDelete={handleDeleteShift}
+                    />
+                </>
             )}
 
             <Snackbar

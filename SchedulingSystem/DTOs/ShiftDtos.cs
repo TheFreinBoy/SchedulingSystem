@@ -37,7 +37,7 @@ public class ShiftAssignmentDto
 {
     public int Id { get; set; }
     public DateOnly Date { get; set; }
-    public int EmployeeId { get; set; }
+    public int? EmployeeId { get; set; }
     public required string EmployeeFullName { get; set; }
     public int ShiftTypeId { get; set; }
     public required string ShiftTypeName { get; set; }
@@ -48,18 +48,19 @@ public class ShiftAssignmentDto
 public class UpdateShiftAssignmentDto
 {
     public DateOnly Date { get; set; }
-    public int EmployeeId { get; set; }
+    public int? EmployeeId { get; set; }
     public int ShiftTypeId { get; set; }
 }
 
 public class CreateShiftAssignmentDto
 {
     public DateOnly Date { get; set; }
-    public int EmployeeId { get; set; }
+    public int? EmployeeId { get; set; }
     public int ShiftTypeId { get; set; }
 }
 public class GenerateScheduleRequestDto
 {
     public DateOnly StartDate { get; set; }
     public DateOnly EndDate { get; set; }
+    public int? PositionId { get; set; }
 }

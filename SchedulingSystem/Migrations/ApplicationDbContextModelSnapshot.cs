@@ -100,7 +100,7 @@ namespace SchedulingSystem.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("EmployeeId");
+                    b.HasIndex("EmployeeId", "StartDate", "EndDate");
 
                     b.ToTable("EmployeeAvailabilities");
                 });
@@ -119,6 +119,9 @@ namespace SchedulingSystem.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Name")
+                        .IsUnique();
+
                     b.ToTable("Positions");
                 });
 
@@ -133,7 +136,7 @@ namespace SchedulingSystem.Migrations
                     b.Property<DateOnly>("Date")
                         .HasColumnType("date");
 
-                    b.Property<int>("EmployeeId")
+                    b.Property<int?>("EmployeeId")
                         .HasColumnType("integer");
 
                     b.Property<int>("ShiftTypeId")
@@ -148,7 +151,8 @@ namespace SchedulingSystem.Migrations
                     b.HasIndex("ShiftTypeId");
 
                     b.HasIndex("EmployeeId", "Date")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"EmployeeId\" IS NOT NULL");
 
                     b.ToTable("ShiftAssignments");
                 });
@@ -215,13 +219,12 @@ namespace SchedulingSystem.Migrations
                     b.HasOne("SchedulingSystem.Entities.Employee", "Employee")
                         .WithMany("ShiftAssignments")
                         .HasForeignKey("EmployeeId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("SchedulingSystem.Entities.ShiftType", "ShiftType")
                         .WithMany()
                         .HasForeignKey("ShiftTypeId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Employee");
@@ -234,7 +237,7 @@ namespace SchedulingSystem.Migrations
                     b.HasOne("SchedulingSystem.Entities.Position", "Position")
                         .WithMany()
                         .HasForeignKey("PositionId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Position");

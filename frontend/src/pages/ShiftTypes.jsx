@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
-    Typography,
     Table,
     TableBody,
     TableCell,
@@ -11,19 +10,21 @@ import {
     CircularProgress,
     Box,
     Button,
-    Dialog,
-    DialogTitle,
-    DialogContent,
-    DialogActions,
     TextField,
     MenuItem,
-    Alert,
     Stack,
-    Snackbar,
 } from '@mui/material';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
-import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import { apiFetch } from '../api/apiClient';
+import {
+    POSITION_PALETTE,
+    buildPositionColorMap,
+    inputSx,
+    primaryBtnSx,
+} from '../constants/uiStyles';
+import PageHeader from '../components/common/PageHeader';
+import CrudFormDialog from '../components/common/CrudFormDialog';
+import ToastNotification from '../components/common/ToastNotification';
 
 const emptyForm = {
     name: '',
@@ -51,7 +52,6 @@ export default function ShiftTypes() {
 
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editingShiftType, setEditingShiftType] = useState(null);
-    const [confirmDelete, setConfirmDelete] = useState(false);
     const [formData, setFormData] = useState(emptyForm);
     const [errorMsg, setErrorMsg] = useState('');
     const [saving, setSaving] = useState(false);
@@ -82,9 +82,10 @@ export default function ShiftTypes() {
         fetchData();
     }, []);
 
+    const positionColorMap = useMemo(() => buildPositionColorMap(positions), [positions]);
+
     const handleOpenCreate = () => {
         setEditingShiftType(null);
-        setConfirmDelete(false);
         setFormData({
             ...emptyForm,
             positionId: positions.length > 0 ? positions[0].id : '',
@@ -95,7 +96,6 @@ export default function ShiftTypes() {
 
     const handleOpenEdit = (st) => {
         setEditingShiftType(st);
-        setConfirmDelete(false);
         setFormData({
             name: st.name,
             shortCode: st.shortCode || st.name.charAt(0).toUpperCase(),
@@ -113,9 +113,10 @@ export default function ShiftTypes() {
         setFormData((prev) => ({
             ...prev,
             name: val,
-            shortCode: !editingShiftType && val.trim().length > 0
-                ? val.trim().charAt(0).toUpperCase()
-                : prev.shortCode,
+            shortCode:
+                !editingShiftType && val.trim().length > 0
+                    ? val.trim().charAt(0).toUpperCase()
+                    : prev.shortCode,
         }));
     };
 
@@ -127,33 +128,25 @@ export default function ShiftTypes() {
 
         setSaving(true);
         setErrorMsg('');
-
         const formatTime = (t) => (t.length === 5 ? `${t}:00` : t);
 
-        const payload = {
-            name: formData.name.trim(),
-            shortCode: formData.shortCode.trim().toUpperCase(),
-            startTime: formatTime(formData.startTime),
-            endTime: formatTime(formData.endTime),
-            requiredStaffCount: Number(formData.requiredStaffCount),
-            positionId: Number(formData.positionId),
-        };
-
         try {
-            const endpoint = editingShiftType
-                ? `/ShiftTypes/${editingShiftType.id}`
-                : '/ShiftTypes';
-            const method = editingShiftType ? 'PUT' : 'POST';
+            const response = await apiFetch(
+                editingShiftType ? `/ShiftTypes/${editingShiftType.id}` : '/ShiftTypes',
+                {
+                    method: editingShiftType ? 'PUT' : 'POST',
+                    body: JSON.stringify({
+                        name: formData.name.trim(),
+                        shortCode: formData.shortCode.trim().toUpperCase(),
+                        startTime: formatTime(formData.startTime),
+                        endTime: formatTime(formData.endTime),
+                        requiredStaffCount: Number(formData.requiredStaffCount),
+                        positionId: Number(formData.positionId),
+                    }),
+                }
+            );
 
-            const response = await apiFetch(endpoint, {
-                method,
-                body: JSON.stringify(payload),
-            });
-
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || 'Помилка збереження типу зміни');
-            }
+            if (!response.ok) throw new Error((await response.text()) || 'Помилка збереження типу зміни');
 
             await fetchData();
             setDialogOpen(false);
@@ -174,91 +167,38 @@ export default function ShiftTypes() {
         setSaving(true);
         setErrorMsg('');
         try {
-            const response = await apiFetch(`/ShiftTypes/${editingShiftType.id}`, {
-                method: 'DELETE',
-            });
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || 'Не вдалося видалити тип зміни');
-            }
+            const response = await apiFetch(`/ShiftTypes/${editingShiftType.id}`, { method: 'DELETE' });
+            if (!response.ok) throw new Error((await response.text()) || 'Не вдалося видалити тип зміни');
+
             await fetchData();
             setDialogOpen(false);
-            setToast({
-                open: true,
-                message: 'Тип зміни видалено.',
-                severity: 'success',
-            });
+            setToast({ open: true, message: 'Тип зміни видалено.', severity: 'success' });
         } catch (err) {
             setErrorMsg(err.message);
         } finally {
             setSaving(false);
-            setConfirmDelete(false);
         }
-    };
-
-    const inputSx = {
-        '& .MuiOutlinedInput-root': {
-            bgcolor: '#1D1A1A',
-            borderRadius: '10px',
-            colorScheme: 'dark',
-            '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.1)' },
-            '&:hover fieldset': { borderColor: 'rgba(255, 255, 255, 0.25)' },
-            '&.Mui-focused fieldset': { borderColor: '#B4F82C' },
-        },
-        '& .MuiInputLabel-root.Mui-focused': { color: '#B4F82C' },
-    };
-
-    const dialogPaperSlotProps = {
-        paper: {
-            sx: {
-                bgcolor: '#222222',
-                borderRadius: '16px',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-            },
-        },
     };
 
     return (
         <Box sx={{ pb: 4 }}>
-            <Box
-                sx={{
-                    mb: 3,
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: { xs: 'flex-start', sm: 'center' },
-                    flexDirection: { xs: 'column', sm: 'row' },
-                    gap: 2,
-                }}
-            >
-                <Box>
-                    <Typography variant="h4" sx={{ color: 'text.primary', mb: 0.5 }}>
-                        Типи змін
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                        Натисніть на рядок зміни, щоб змінити параметри або видалити її
-                    </Typography>
-                </Box>
-
-                <Button
-                    variant="contained"
-                    startIcon={<AddRoundedIcon />}
-                    onClick={(e) => {
-                        e.currentTarget.blur();
-                        handleOpenCreate();
-                    }}
-                    sx={{
-                        bgcolor: '#B4F82C',
-                        color: '#181515',
-                        fontWeight: 700,
-                        px: 2.2,
-                        py: 1,
-                        borderRadius: '10px',
-                        '&:hover': { bgcolor: '#a3e61e' },
-                    }}
-                >
-                    Додати тип зміни
-                </Button>
-            </Box>
+            <PageHeader
+                title="Типи змін"
+                subtitle="Натисніть на рядок зміни, щоб змінити параметри або видалити її"
+                action={
+                    <Button
+                        variant="contained"
+                        startIcon={<AddRoundedIcon />}
+                        onClick={(e) => {
+                            e.currentTarget.blur();
+                            handleOpenCreate();
+                        }}
+                        sx={{ ...primaryBtnSx, px: 2.2, py: 1 }}
+                    >
+                        Додати тип зміни
+                    </Button>
+                }
+            />
 
             {loading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', mt: 6 }}>
@@ -282,6 +222,7 @@ export default function ShiftTypes() {
                                 const start = st.startTime?.slice(0, 5);
                                 const end = st.endTime?.slice(0, 5);
                                 const hours = calculateDuration(start, end);
+                                const posPalette = positionColorMap[st.positionId] || POSITION_PALETTE[0];
 
                                 return (
                                     <TableRow
@@ -305,9 +246,9 @@ export default function ShiftTypes() {
                                                     px: 1,
                                                     py: 0.6,
                                                     borderRadius: '4px',
-                                                    bgcolor: 'rgba(56, 189, 248, 0.14)',
-                                                    borderLeft: '4px solid #38BDF8',
-                                                    color: '#38BDF8',
+                                                    bgcolor: posPalette.bg,
+                                                    borderLeft: `4px solid ${posPalette.accent}`,
+                                                    color: posPalette.accent,
                                                     fontSize: '0.85rem',
                                                     fontWeight: 800,
                                                 }}
@@ -315,9 +256,7 @@ export default function ShiftTypes() {
                                                 {st.shortCode || st.name.charAt(0).toUpperCase()}
                                             </Box>
                                         </TableCell>
-                                        <TableCell sx={{ fontWeight: 600, color: '#F3F3F3' }}>
-                                            {st.name}
-                                        </TableCell>
+                                        <TableCell sx={{ fontWeight: 600, color: '#F3F3F3' }}>{st.name}</TableCell>
                                         <TableCell>
                                             <Box
                                                 component="span"
@@ -326,9 +265,9 @@ export default function ShiftTypes() {
                                                     px: 1.5,
                                                     py: 0.8,
                                                     borderRadius: '4px',
-                                                    bgcolor: 'rgba(56, 189, 248, 0.14)',
-                                                    borderLeft: '4px solid #38BDF8',
-                                                    color: '#38BDF8',
+                                                    bgcolor: posPalette.bg,
+                                                    borderLeft: `4px solid ${posPalette.accent}`,
+                                                    color: posPalette.accent,
                                                     fontSize: '0.85rem',
                                                     fontWeight: 700,
                                                 }}
@@ -367,164 +306,88 @@ export default function ShiftTypes() {
                 </TableContainer>
             )}
 
-            <Dialog
+            <CrudFormDialog
                 open={dialogOpen}
                 onClose={() => setDialogOpen(false)}
-                maxWidth="sm"
-                fullWidth
-                slotProps={dialogPaperSlotProps}
+                title={editingShiftType ? 'Редагувати тип зміни' : 'Новий тип зміни'}
+                isEditing={Boolean(editingShiftType)}
+                errorMsg={errorMsg}
+                saving={saving}
+                onSave={handleSave}
+                onDelete={handleDelete}
             >
-                <DialogTitle sx={{ fontWeight: 700, pb: 1 }}>
-                    {editingShiftType ? 'Редагувати тип зміни' : 'Новий тип зміни'}
-                </DialogTitle>
-                <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '12px !important' }}>
-                    {errorMsg && (
-                        <Alert severity="error" sx={{ borderRadius: '10px' }}>
-                            {errorMsg}
-                        </Alert>
-                    )}
-
-                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                        <TextField
-                            label="Назва (напр. Денна)"
-                            fullWidth
-                            value={formData.name}
-                            onChange={handleNameChange}
-                            sx={inputSx}
-                        />
-                        <TextField
-                            label="Код у календарі"
-                            value={formData.shortCode}
-                            onChange={(e) =>
-                                setFormData((prev) => ({
-                                    ...prev,
-                                    shortCode: e.target.value.slice(0, 3).toUpperCase(),
-                                }))
-                            }
-                            sx={{ ...inputSx, minWidth: { sm: 150 } }}
-                        />
-                    </Stack>
-
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                     <TextField
-                        select
-                        label="Посада"
+                        label="Назва (напр. Денна)"
                         fullWidth
-                        value={formData.positionId}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, positionId: e.target.value }))}
+                        value={formData.name}
+                        onChange={handleNameChange}
                         sx={inputSx}
-                    >
-                        {positions.map((pos) => (
-                            <MenuItem key={pos.id} value={pos.id}>
-                                {pos.name}
-                            </MenuItem>
-                        ))}
-                    </TextField>
+                    />
+                    <TextField
+                        label="Код у календарі"
+                        value={formData.shortCode}
+                        onChange={(e) =>
+                            setFormData((prev) => ({
+                                ...prev,
+                                shortCode: e.target.value.slice(0, 3).toUpperCase(),
+                            }))
+                        }
+                        sx={{ ...inputSx, minWidth: { sm: 150 } }}
+                    />
+                </Stack>
 
-                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                        <TextField
-                            label="Початок зміни"
-                            type="time"
-                            fullWidth
-                            slotProps={{ inputLabel: { shrink: true } }}
-                            value={formData.startTime}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, startTime: e.target.value }))}
-                            sx={inputSx}
-                        />
-                        <TextField
-                            label="Кінець зміни"
-                            type="time"
-                            fullWidth
-                            slotProps={{ inputLabel: { shrink: true } }}
-                            value={formData.endTime}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, endTime: e.target.value }))}
-                            sx={inputSx}
-                        />
-                        <TextField
-                            label="Потрібно персоналу"
-                            type="number"
-                            fullWidth
-                            value={formData.requiredStaffCount}
-                            onChange={(e) =>
-                                setFormData((prev) => ({ ...prev, requiredStaffCount: e.target.value }))
-                            }
-                            sx={inputSx}
-                        />
-                    </Stack>
-                </DialogContent>
-                <DialogActions sx={{ px: 3, pb: 2.5, justifyContent: 'space-between' }}>
-                    {editingShiftType ? (
-                        confirmDelete ? (
-                            <Button
-                                variant="contained"
-                                onClick={handleDelete}
-                                disabled={saving}
-                                sx={{
-                                    bgcolor: '#F87171',
-                                    color: '#181515',
-                                    fontWeight: 700,
-                                    '&:hover': { bgcolor: '#ef4444' },
-                                }}
-                            >
-                                Підтвердити видалення
-                            </Button>
-                        ) : (
-                            <Button
-                                startIcon={<DeleteOutlineRoundedIcon />}
-                                onClick={() => setConfirmDelete(true)}
-                                sx={{ color: '#F87171' }}
-                            >
-                                Видалити
-                            </Button>
-                        )
-                    ) : (
-                        <Box />
-                    )}
-
-                    <Box sx={{ display: 'flex', gap: 1 }}>
-                        <Button onClick={() => setDialogOpen(false)} sx={{ color: '#989898' }}>
-                            Скасувати
-                        </Button>
-                        <Button
-                            variant="contained"
-                            onClick={handleSave}
-                            disabled={saving}
-                            sx={{
-                                bgcolor: '#B4F82C',
-                                color: '#181515',
-                                fontWeight: 700,
-                                px: 3,
-                                '&:hover': { bgcolor: '#a3e61e' },
-                            }}
-                        >
-                            {saving ? 'Збереження...' : 'Зберегти'}
-                        </Button>
-                    </Box>
-                </DialogActions>
-            </Dialog>
-
-            <Snackbar
-                open={toast.open}
-                autoHideDuration={4500}
-                onClose={() => setToast((prev) => ({ ...prev, open: false }))}
-                anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-            >
-                <Alert
-                    onClose={() => setToast((prev) => ({ ...prev, open: false }))}
-                    severity={toast.severity}
-                    variant="filled"
-                    sx={{
-                        borderRadius: '12px',
-                        fontWeight: 600,
-                        ...(toast.severity === 'success' && {
-                            bgcolor: '#B4F82C',
-                            color: '#181515',
-                            '& .MuiAlert-icon': { color: '#181515' },
-                        }),
-                    }}
+                <TextField
+                    select
+                    label="Посада"
+                    fullWidth
+                    value={formData.positionId}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, positionId: e.target.value }))}
+                    sx={inputSx}
                 >
-                    {toast.message}
-                </Alert>
-            </Snackbar>
+                    {positions.map((pos) => (
+                        <MenuItem key={pos.id} value={pos.id}>
+                            {pos.name}
+                        </MenuItem>
+                    ))}
+                </TextField>
+
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                    <TextField
+                        label="Початок зміни"
+                        type="time"
+                        fullWidth
+                        slotProps={{ inputLabel: { shrink: true } }}
+                        value={formData.startTime}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, startTime: e.target.value }))}
+                        sx={inputSx}
+                    />
+                    <TextField
+                        label="Кінець зміни"
+                        type="time"
+                        fullWidth
+                        slotProps={{ inputLabel: { shrink: true } }}
+                        value={formData.endTime}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, endTime: e.target.value }))}
+                        sx={inputSx}
+                    />
+                    <TextField
+                        label="Потрібно персоналу"
+                        type="number"
+                        fullWidth
+                        value={formData.requiredStaffCount}
+                        onChange={(e) =>
+                            setFormData((prev) => ({ ...prev, requiredStaffCount: e.target.value }))
+                        }
+                        sx={inputSx}
+                    />
+                </Stack>
+            </CrudFormDialog>
+
+            <ToastNotification
+                toast={toast}
+                onClose={() => setToast((prev) => ({ ...prev, open: false }))}
+            />
         </Box>
     );
 }

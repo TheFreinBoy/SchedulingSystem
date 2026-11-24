@@ -5,5 +5,5 @@ namespace SchedulingSystem.Services;
 
 public interface IScheduleGeneratorService
 {
-    Task<int> GenerateScheduleAsync(DateOnly startDate, DateOnly endDate);
+    Task<int> GenerateScheduleAsync(DateOnly startDate, DateOnly endDate, int? positionId = null);
 }

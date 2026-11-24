@@ -1,70 +1,159 @@
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SchedulingSystem.Data;
 using SchedulingSystem.Entities;
-using SchedulingSystem.DTOs;
 
 namespace SchedulingSystem.Controllers;
-[Route("api/[controller]")]
+
 [ApiController]
+[Route("api/[controller]")]
 public class EmployeeAvailabilitiesController(ApplicationDbContext context) : ControllerBase
 {
+    public record AvailabilityUpsertDto(
+        int EmployeeId,
+        DateOnly StartDate,
+        DateOnly EndDate,
+        string Reason
+    );
+
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<EmployeeAvailabilityDto>>> GetAvailabilities()
+    public async Task<IActionResult> GetAvailabilities([FromQuery] int? employeeId)
     {
-        var availabilities = await context.EmployeeAvailabilities
-            .Include(ea => ea.Employee)
-            .Select(ea => new EmployeeAvailabilityDto
+        var query = context.EmployeeAvailabilities
+            .Include(a => a.Employee)
+            .ThenInclude(e => e!.Position)
+            .AsQueryable();
+
+        if (employeeId.HasValue)
+        {
+            query = query.Where(a => a.EmployeeId == employeeId.Value);
+        }
+
+        var items = await query
+            .OrderByDescending(a => a.StartDate)
+            .ThenBy(a => a.Employee!.LastName)
+            .Select(a => new
             {
-                Id = ea.Id,
-                EmployeeFullName = ea.Employee!.FirstName + " " + ea.Employee.LastName,
-                StartDate = ea.StartDate,
-                EndDate = ea.EndDate,
-                Reason = ea.Reason
+                a.Id,
+                a.EmployeeId,
+                EmployeeFullName = a.Employee != null
+                    ? string.Join(" ", new[] { a.Employee.LastName, a.Employee.FirstName, a.Employee.MiddleName }
+                        .Where(s => !string.IsNullOrWhiteSpace(s)))
+                    : "Невідомий працівник",
+                PositionName = a.Employee != null && a.Employee.Position != null
+                    ? a.Employee.Position.Name
+                    : "",
+                a.StartDate,
+                a.EndDate,
+                DaysCount = a.EndDate.DayNumber - a.StartDate.DayNumber + 1,
+                a.Reason
             })
             .ToListAsync();
 
-        return Ok(availabilities);
+        return Ok(items);
     }
 
     [HttpPost]
-    public async Task<ActionResult> CreateAvailability(CreateEmployeeAvailabilityDto dto)
+    public async Task<IActionResult> CreateAvailability([FromBody] AvailabilityUpsertDto dto)
     {
-        var employeeExists = await context.Employees.AnyAsync(e => e.Id == dto.EmployeeId);
-        if (!employeeExists)
-        {
-            return BadRequest("Працівник не знайдений.");
-        }
+        var employee = await context.Employees.FindAsync(dto.EmployeeId);
+        if (employee == null)
+            return NotFound("Працівника не знайдено.");
 
-        if (dto.StartDate > dto.EndDate)
-        {
-            return BadRequest("Дата початку не може бути пізнішою за дату завершення.");
-        }
+        if (dto.EndDate < dto.StartDate)
+            return BadRequest("Кінцева дата не може бути ранішою за початкову.");
 
-        var hasOverlap = await context.EmployeeAvailabilities
-            .AnyAsync(ea => ea.EmployeeId == dto.EmployeeId &&
-                            dto.StartDate <= ea.EndDate &&
-                            dto.EndDate >= ea.StartDate);
+        var reason = dto.Reason?.Trim();
+        if (string.IsNullOrWhiteSpace(reason))
+            return BadRequest("Вкажіть причину відсутності.");
+
+        var hasOverlap = await context.EmployeeAvailabilities.AnyAsync(a =>
+            a.EmployeeId == dto.EmployeeId &&
+            a.StartDate <= dto.EndDate &&
+            a.EndDate >= dto.StartDate);
 
         if (hasOverlap)
-        {
-            return BadRequest("У цього працівника вже є створений відгул або відпустка, що перетинається з обраним періодом.");
-        }
+            return BadRequest("Для цього працівника вже існує запис відсутності, що перетинається з обраними датами.");
 
         var availability = new EmployeeAvailability
         {
             EmployeeId = dto.EmployeeId,
             StartDate = dto.StartDate,
             EndDate = dto.EndDate,
-            Reason = dto.Reason
+            Reason = reason
         };
 
         context.EmployeeAvailabilities.Add(availability);
         await context.SaveChangesAsync();
 
-        return Ok();
+        var conflictingShiftsCount = await context.ShiftAssignments
+            .CountAsync(s => s.EmployeeId == dto.EmployeeId && s.Date >= dto.StartDate && s.Date <= dto.EndDate);
+
+        string? warning = conflictingShiftsCount > 0
+            ? $"Запис збережено, але у працівника вже є призначені зміни ({conflictingShiftsCount} шт.) у цей період."
+            : null;
+
+        return Ok(new
+        {
+            message = "Період відсутності збережено.",
+            warning
+        });
+    }
+
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> UpdateAvailability(int id, [FromBody] AvailabilityUpsertDto dto)
+    {
+        var availability = await context.EmployeeAvailabilities.FindAsync(id);
+        if (availability == null)
+            return NotFound("Запис не знайдено.");
+
+        if (dto.EndDate < dto.StartDate)
+            return BadRequest("Кінцева дата не може бути ранішою за початкову.");
+
+        var reason = dto.Reason?.Trim();
+        if (string.IsNullOrWhiteSpace(reason))
+            return BadRequest("Вкажіть причину відсутності.");
+
+        var hasOverlap = await context.EmployeeAvailabilities.AnyAsync(a =>
+            a.Id != id &&
+            a.EmployeeId == dto.EmployeeId &&
+            a.StartDate <= dto.EndDate &&
+            a.EndDate >= dto.StartDate);
+
+        if (hasOverlap)
+            return BadRequest("Для цього працівника вже існує інший запис, що перетинається з цими датами.");
+
+        availability.EmployeeId = dto.EmployeeId;
+        availability.StartDate = dto.StartDate;
+        availability.EndDate = dto.EndDate;
+        availability.Reason = reason;
+
+        await context.SaveChangesAsync();
+
+        var conflictingShiftsCount = await context.ShiftAssignments
+            .CountAsync(s => s.EmployeeId == dto.EmployeeId && s.Date >= dto.StartDate && s.Date <= dto.EndDate);
+
+        string? warning = conflictingShiftsCount > 0
+            ? $"Запис оновлено, але у працівника вже є призначені зміни ({conflictingShiftsCount} шт.) у цей період."
+            : null;
+
+        return Ok(new
+        {
+            message = "Запис відсутності оновлено.",
+            warning
+        });
+    }
+
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> DeleteAvailability(int id)
+    {
+        var availability = await context.EmployeeAvailabilities.FindAsync(id);
+        if (availability == null)
+            return NotFound("Запис не знайдено.");
+
+        context.EmployeeAvailabilities.Remove(availability);
+        await context.SaveChangesAsync();
+
+        return Ok(new { message = "Запис видалено." });
     }
 }

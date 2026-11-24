@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
     Typography,
     Table,
@@ -20,10 +20,21 @@ import {
     Alert,
     Stack,
     Snackbar,
+    InputAdornment,
 } from '@mui/material';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import { apiFetch } from '../api/apiClient';
+import {
+    POSITION_PALETTE,
+    buildPositionColorMap,
+    inputSx,
+    dialogPaperSlotProps,
+    primaryBtnSx,
+    dangerBtnSx,
+} from '../constants/uiStyles';
+import PositionFilterBar from '../components/common/PositionFilterBar';
 
 const emptyForm = {
     firstName: '',
@@ -42,7 +53,10 @@ export default function Employees() {
     const [positions, setPositions] = useState([]);
     const [loading, setLoading] = useState(true);
 
-    // Модальне вікно створення / редагування / видалення
+    const [selectedPositionId, setSelectedPositionId] = useState('all');
+    const [statusFilter, setStatusFilter] = useState('all');
+    const [searchQuery, setSearchQuery] = useState('');
+
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editingEmployee, setEditingEmployee] = useState(null);
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -76,12 +90,58 @@ export default function Employees() {
         fetchData();
     }, []);
 
+    const positionColorMap = useMemo(() => buildPositionColorMap(positions), [positions]);
+
+    const positionCounts = useMemo(() => {
+        const counts = { all: employees.length };
+        positions.forEach((p) => {
+            counts[p.id] = 0;
+        });
+        employees.forEach((emp) => {
+            if (emp.positionId != null && counts[emp.positionId] !== undefined) {
+                counts[emp.positionId] += 1;
+            }
+        });
+        return counts;
+    }, [employees, positions]);
+
+    const formatFullName = (emp) => {
+        return [emp.lastName, emp.firstName, emp.middleName].filter(Boolean).join(' ');
+    };
+
+    const filteredEmployees = useMemo(() => {
+        const normalizedSearch = searchQuery.trim().toLowerCase();
+
+        return employees.filter((emp) => {
+            if (selectedPositionId !== 'all' && emp.positionId !== Number(selectedPositionId)) {
+                return false;
+            }
+            if (statusFilter === 'active' && emp.isActive === false) return false;
+            if (statusFilter === 'archived' && emp.isActive !== false) return false;
+
+            if (normalizedSearch) {
+                const fullName = formatFullName(emp).toLowerCase();
+                const email = (emp.email || '').toLowerCase();
+                if (!fullName.includes(normalizedSearch) && !email.includes(normalizedSearch)) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+    }, [employees, selectedPositionId, statusFilter, searchQuery]);
+
     const handleOpenCreate = () => {
         setEditingEmployee(null);
         setConfirmDelete(false);
         setFormData({
             ...emptyForm,
-            positionId: positions.length > 0 ? positions[0].id : '',
+            positionId:
+                selectedPositionId !== 'all'
+                    ? Number(selectedPositionId)
+                    : positions.length > 0
+                        ? positions[0].id
+                        : '',
         });
         setErrorMsg('');
         setDialogOpen(true);
@@ -131,20 +191,15 @@ export default function Employees() {
         };
 
         try {
-            const endpoint = editingEmployee
-                ? `/Employees/${editingEmployee.id}`
-                : '/Employees';
-            const method = editingEmployee ? 'PUT' : 'POST';
+            const response = await apiFetch(
+                editingEmployee ? `/Employees/${editingEmployee.id}` : '/Employees',
+                {
+                    method: editingEmployee ? 'PUT' : 'POST',
+                    body: JSON.stringify(payload),
+                }
+            );
 
-            const response = await apiFetch(endpoint, {
-                method,
-                body: JSON.stringify(payload),
-            });
-
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || 'Помилка збереження працівника');
-            }
+            if (!response.ok) throw new Error((await response.text()) || 'Помилка збереження працівника');
 
             await fetchData();
             setDialogOpen(false);
@@ -165,13 +220,8 @@ export default function Employees() {
         setSaving(true);
         setErrorMsg('');
         try {
-            const response = await apiFetch(`/Employees/${editingEmployee.id}`, {
-                method: 'DELETE',
-            });
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || 'Не вдалося видалити працівника.');
-            }
+            const response = await apiFetch(`/Employees/${editingEmployee.id}`, { method: 'DELETE' });
+            if (!response.ok) throw new Error((await response.text()) || 'Не вдалося видалити працівника.');
             const data = await response.json().catch(() => ({}));
             await fetchData();
             setDialogOpen(false);
@@ -188,36 +238,11 @@ export default function Employees() {
         }
     };
 
-    const formatFullName = (emp) => {
-        return [emp.lastName, emp.firstName, emp.middleName].filter(Boolean).join(' ');
-    };
-
-    const inputSx = {
-        '& .MuiOutlinedInput-root': {
-            bgcolor: '#1D1A1A',
-            borderRadius: '10px',
-            '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.1)' },
-            '&:hover fieldset': { borderColor: 'rgba(255, 255, 255, 0.25)' },
-            '&.Mui-focused fieldset': { borderColor: '#B4F82C' },
-        },
-        '& .MuiInputLabel-root.Mui-focused': { color: '#B4F82C' },
-    };
-
-    const dialogPaperSlotProps = {
-        paper: {
-            sx: {
-                bgcolor: '#222222',
-                borderRadius: '16px',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-            },
-        },
-    };
-
     return (
         <Box sx={{ pb: 4 }}>
             <Box
                 sx={{
-                    mb: 3,
+                    mb: 2.5,
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: { xs: 'flex-start', sm: 'center' },
@@ -241,19 +266,51 @@ export default function Employees() {
                         e.currentTarget.blur();
                         handleOpenCreate();
                     }}
-                    sx={{
-                        bgcolor: '#B4F82C',
-                        color: '#181515',
-                        fontWeight: 700,
-                        px: 2.2,
-                        py: 1,
-                        borderRadius: '10px',
-                        '&:hover': { bgcolor: '#a3e61e' },
-                    }}
+                    sx={{ ...primaryBtnSx, px: 2.2, py: 1 }}
                 >
                     Додати працівника
                 </Button>
             </Box>
+
+            <PositionFilterBar
+                positions={positions}
+                counts={positionCounts}
+                selectedPositionId={selectedPositionId}
+                onSelectPosition={setSelectedPositionId}
+                positionColorMap={positionColorMap}
+                rightContent={
+                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.2} sx={{ alignItems: 'center' }}>
+                        <TextField
+                            size="small"
+                            placeholder="Пошук за ПІБ або Email..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            slotProps={{
+                                input: {
+                                    startAdornment: (
+                                        <InputAdornment position="start">
+                                            <SearchRoundedIcon sx={{ color: '#989898', fontSize: 19 }} />
+                                        </InputAdornment>
+                                    ),
+                                },
+                            }}
+                            sx={{ ...inputSx, minWidth: { xs: '100%', sm: 220 } }}
+                        />
+
+                        <TextField
+                            select
+                            size="small"
+                            value={statusFilter}
+                            onChange={(e) => setStatusFilter(e.target.value)}
+                            sx={{ ...inputSx, minWidth: { xs: '100%', sm: 145 } }}
+                        >
+                            <MenuItem value="all">Усі статуси</MenuItem>
+                            <MenuItem value="active">Активні</MenuItem>
+                            <MenuItem value="archived">Архівні</MenuItem>
+                        </TextField>
+                    </Stack>
+                }
+            />
 
             {loading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', mt: 6 }}>
@@ -273,116 +330,118 @@ export default function Employees() {
                             </TableRow>
                         </TableHead>
                         <TableBody>
-                            {employees.map((emp) => {
-                                const isArchived = emp.isActive === false;
-                                const currentHours = emp.currentWeekHours ?? 0;
-                                const isOvertime = currentHours > emp.maxHoursPerWeek;
+                            {filteredEmployees.length === 0 ? (
+                                <TableRow>
+                                    <TableCell colSpan={6} align="center" sx={{ py: 5, color: '#989898', borderBottom: 'none' }}>
+                                        Працівників за вибраними фільтрами не знайдено
+                                    </TableCell>
+                                </TableRow>
+                            ) : (
+                                filteredEmployees.map((emp) => {
+                                    const isArchived = emp.isActive === false;
+                                    const currentHours = emp.currentWeekHours ?? 0;
+                                    const isOvertime = currentHours > emp.maxHoursPerWeek;
+                                    const posPalette = positionColorMap[emp.positionId] || POSITION_PALETTE[0];
 
-                                return (
-                                    <TableRow
-                                        key={emp.id}
-                                        onClick={() => handleOpenEdit(emp)}
-                                        sx={{
-                                            cursor: 'pointer',
-                                            opacity: isArchived ? 0.55 : 1,
-                                            transition: 'background-color 0.15s',
-                                            '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.05)' },
-                                            '& td': { borderBottomColor: 'rgba(255, 255, 255, 0.05)' },
-                                        }}
-                                    >
-                                        <TableCell sx={{ color: '#989898', fontWeight: 600 }}>#{emp.id}</TableCell>
-                                        <TableCell sx={{ fontWeight: 600, color: '#F3F3F3' }}>
-                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                                                <span>{formatFullName(emp)}</span>
-                                                {isArchived && (
-                                                    <Box
-                                                        component="span"
-                                                        sx={{
-                                                            px: 1,
-                                                            py: 0.25,
-                                                            borderRadius: '4px',
-                                                            bgcolor: 'rgba(248, 113, 113, 0.14)',
-                                                            color: '#F87171',
-                                                            fontSize: '0.72rem',
-                                                            fontWeight: 700,
-                                                        }}
-                                                    >
-                                                        Архів
-                                                    </Box>
-                                                )}
-                                            </Box>
-                                        </TableCell>
-                                        <TableCell>
-                                            <Box
-                                                component="span"
-                                                sx={{
-                                                    display: 'inline-block',
-                                                    px: 1.5,
-                                                    py: 0.9,
-                                                    borderRadius: '4px',
-                                                    bgcolor: 'rgba(56, 189, 248, 0.14)',
-                                                    borderLeft: '4px solid #38BDF8',
-                                                    color: '#38BDF8',
-                                                    fontSize: '0.85rem',
-                                                    fontWeight: 700,
-                                                }}
-                                            >
-                                                {emp.positionName}
-                                            </Box>
-                                        </TableCell>
-                                        <TableCell sx={{ color: '#989898' }}>{emp.email}</TableCell>
-                                        <TableCell align="center">
-                                            <Box
-                                                component="span"
-                                                sx={{
-                                                    display: 'inline-block',
-                                                    px: 1.5,
-                                                    py: 0.65,
-                                                    borderRadius: '4px',
-                                                    bgcolor: isOvertime
-                                                        ? 'rgba(248, 113, 113, 0.14)'
-                                                        : 'rgba(255, 255, 255, 0.06)',
-                                                    color: isOvertime ? '#F87171' : '#F3F3F3',
-                                                    fontSize: '0.85rem',
-                                                    fontWeight: 700,
-                                                }}
-                                            >
-                                                {currentHours} / {emp.maxHoursPerWeek} год
-                                            </Box>
-                                        </TableCell>
-                                        <TableCell align="center">
-                                            <Box
-                                                component="span"
-                                                sx={{
-                                                    display: 'inline-block',
-                                                    px: 1.5,
-                                                    py: 0.65,
-                                                    borderRadius: '4px',
-                                                    bgcolor: 'rgba(180, 248, 44, 0.12)',
-                                                    color: '#B4F82C',
-                                                    fontSize: '0.85rem',
-                                                    fontWeight: 700,
-                                                }}
-                                            >
-                                                {emp.workDaysPattern} / {emp.offDaysPattern}
-                                            </Box>
-                                        </TableCell>
-                                    </TableRow>
-                                );
-                            })}
+                                    return (
+                                        <TableRow
+                                            key={emp.id}
+                                            onClick={() => handleOpenEdit(emp)}
+                                            sx={{
+                                                cursor: 'pointer',
+                                                opacity: isArchived ? 0.55 : 1,
+                                                transition: 'background-color 0.15s',
+                                                '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.05)' },
+                                                '& td': { borderBottomColor: 'rgba(255, 255, 255, 0.05)' },
+                                            }}
+                                        >
+                                            <TableCell sx={{ color: '#989898', fontWeight: 600 }}>#{emp.id}</TableCell>
+                                            <TableCell sx={{ fontWeight: 600, color: '#F3F3F3' }}>
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                                                    <span>{formatFullName(emp)}</span>
+                                                    {isArchived && (
+                                                        <Box
+                                                            component="span"
+                                                            sx={{
+                                                                px: 1,
+                                                                py: 0.25,
+                                                                borderRadius: '4px',
+                                                                bgcolor: 'rgba(248, 113, 113, 0.14)',
+                                                                color: '#F87171',
+                                                                fontSize: '0.72rem',
+                                                                fontWeight: 700,
+                                                            }}
+                                                        >
+                                                            Архів
+                                                        </Box>
+                                                    )}
+                                                </Box>
+                                            </TableCell>
+                                            <TableCell>
+                                                <Box
+                                                    component="span"
+                                                    sx={{
+                                                        display: 'inline-block',
+                                                        px: 1.5,
+                                                        py: 0.9,
+                                                        borderRadius: '4px',
+                                                        bgcolor: posPalette.bg,
+                                                        borderLeft: `4px solid ${posPalette.accent}`,
+                                                        color: posPalette.accent,
+                                                        fontSize: '0.85rem',
+                                                        fontWeight: 700,
+                                                    }}
+                                                >
+                                                    {emp.positionName}
+                                                </Box>
+                                            </TableCell>
+                                            <TableCell sx={{ color: '#989898' }}>{emp.email}</TableCell>
+                                            <TableCell align="center">
+                                                <Box
+                                                    component="span"
+                                                    sx={{
+                                                        display: 'inline-block',
+                                                        px: 1.5,
+                                                        py: 0.65,
+                                                        borderRadius: '4px',
+                                                        bgcolor: isOvertime
+                                                            ? 'rgba(248, 113, 113, 0.14)'
+                                                            : 'rgba(255, 255, 255, 0.06)',
+                                                        color: isOvertime ? '#F87171' : '#F3F3F3',
+                                                        fontSize: '0.85rem',
+                                                        fontWeight: 700,
+                                                    }}
+                                                >
+                                                    {currentHours} / {emp.maxHoursPerWeek} год
+                                                </Box>
+                                            </TableCell>
+                                            <TableCell align="center">
+                                                <Box
+                                                    component="span"
+                                                    sx={{
+                                                        display: 'inline-block',
+                                                        px: 1.5,
+                                                        py: 0.65,
+                                                        borderRadius: '4px',
+                                                        bgcolor: 'rgba(180, 248, 44, 0.12)',
+                                                        color: '#B4F82C',
+                                                        fontSize: '0.85rem',
+                                                        fontWeight: 700,
+                                                    }}
+                                                >
+                                                    {emp.workDaysPattern} / {emp.offDaysPattern}
+                                                </Box>
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })
+                            )}
                         </TableBody>
                     </Table>
                 </TableContainer>
             )}
 
-            {/* Модальне вікно додавання / редагування / видалення */}
-            <Dialog
-                open={dialogOpen}
-                onClose={() => setDialogOpen(false)}
-                maxWidth="sm"
-                fullWidth
-                slotProps={dialogPaperSlotProps}
-            >
+            <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth slotProps={dialogPaperSlotProps}>
                 <DialogTitle sx={{ fontWeight: 700, pb: 1 }}>
                     {editingEmployee ? 'Редагувати працівника' : 'Новий працівник'}
                 </DialogTitle>
@@ -394,47 +453,15 @@ export default function Employees() {
                     )}
 
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                        <TextField
-                            label="Прізвище"
-                            fullWidth
-                            value={formData.lastName}
-                            onChange={handleChange('lastName')}
-                            sx={inputSx}
-                        />
-                        <TextField
-                            label="Ім'я"
-                            fullWidth
-                            value={formData.firstName}
-                            onChange={handleChange('firstName')}
-                            sx={inputSx}
-                        />
-                        <TextField
-                            label="По батькові"
-                            fullWidth
-                            value={formData.middleName}
-                            onChange={handleChange('middleName')}
-                            sx={inputSx}
-                        />
+                        <TextField label="Прізвище" fullWidth value={formData.lastName} onChange={handleChange('lastName')} sx={inputSx} />
+                        <TextField label="Ім'я" fullWidth value={formData.firstName} onChange={handleChange('firstName')} sx={inputSx} />
+                        <TextField label="По батькові" fullWidth value={formData.middleName} onChange={handleChange('middleName')} sx={inputSx} />
                     </Stack>
 
-                    <TextField
-                        label="Email"
-                        type="email"
-                        fullWidth
-                        value={formData.email}
-                        onChange={handleChange('email')}
-                        sx={inputSx}
-                    />
+                    <TextField label="Email" type="email" fullWidth value={formData.email} onChange={handleChange('email')} sx={inputSx} />
 
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                        <TextField
-                            select
-                            label="Посада"
-                            fullWidth
-                            value={formData.positionId}
-                            onChange={handleChange('positionId')}
-                            sx={inputSx}
-                        >
+                        <TextField select label="Посада" fullWidth value={formData.positionId} onChange={handleChange('positionId')} sx={inputSx}>
                             {positions.map((pos) => (
                                 <MenuItem key={pos.id} value={pos.id}>
                                     {pos.name}
@@ -448,12 +475,7 @@ export default function Employees() {
                                 label="Статус"
                                 fullWidth
                                 value={formData.isActive ? 'true' : 'false'}
-                                onChange={(e) =>
-                                    setFormData((prev) => ({
-                                        ...prev,
-                                        isActive: e.target.value === 'true',
-                                    }))
-                                }
+                                onChange={(e) => setFormData((prev) => ({ ...prev, isActive: e.target.value === 'true' }))}
                                 sx={inputSx}
                             >
                                 <MenuItem value="true">Активний</MenuItem>
@@ -463,54 +485,19 @@ export default function Employees() {
                     </Stack>
 
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                        <TextField
-                            label="Макс. годин / тиждень"
-                            type="number"
-                            fullWidth
-                            value={formData.maxHoursPerWeek}
-                            onChange={handleChange('maxHoursPerWeek')}
-                            sx={inputSx}
-                        />
-                        <TextField
-                            label="Робочих днів"
-                            type="number"
-                            fullWidth
-                            value={formData.workDaysPattern}
-                            onChange={handleChange('workDaysPattern')}
-                            sx={inputSx}
-                        />
-                        <TextField
-                            label="Вихідних днів"
-                            type="number"
-                            fullWidth
-                            value={formData.offDaysPattern}
-                            onChange={handleChange('offDaysPattern')}
-                            sx={inputSx}
-                        />
+                        <TextField label="Макс. годин / тиждень" type="number" fullWidth value={formData.maxHoursPerWeek} onChange={handleChange('maxHoursPerWeek')} sx={inputSx} />
+                        <TextField label="Робочих днів" type="number" fullWidth value={formData.workDaysPattern} onChange={handleChange('workDaysPattern')} sx={inputSx} />
+                        <TextField label="Вихідних днів" type="number" fullWidth value={formData.offDaysPattern} onChange={handleChange('offDaysPattern')} sx={inputSx} />
                     </Stack>
                 </DialogContent>
                 <DialogActions sx={{ px: 3, pb: 2.5, justifyContent: 'space-between' }}>
                     {editingEmployee ? (
                         confirmDelete ? (
-                            <Button
-                                variant="contained"
-                                onClick={handleDelete}
-                                disabled={saving}
-                                sx={{
-                                    bgcolor: '#F87171',
-                                    color: '#181515',
-                                    fontWeight: 700,
-                                    '&:hover': { bgcolor: '#ef4444' },
-                                }}
-                            >
+                            <Button variant="contained" onClick={handleDelete} disabled={saving} sx={dangerBtnSx}>
                                 Підтвердити видалення
                             </Button>
                         ) : (
-                            <Button
-                                startIcon={<DeleteOutlineRoundedIcon />}
-                                onClick={() => setConfirmDelete(true)}
-                                sx={{ color: '#F87171' }}
-                            >
+                            <Button startIcon={<DeleteOutlineRoundedIcon />} onClick={() => setConfirmDelete(true)} sx={{ color: '#F87171' }}>
                                 Видалити
                             </Button>
                         )
@@ -522,18 +509,7 @@ export default function Employees() {
                         <Button onClick={() => setDialogOpen(false)} sx={{ color: '#989898' }}>
                             Скасувати
                         </Button>
-                        <Button
-                            variant="contained"
-                            onClick={handleSave}
-                            disabled={saving}
-                            sx={{
-                                bgcolor: '#B4F82C',
-                                color: '#181515',
-                                fontWeight: 700,
-                                px: 3,
-                                '&:hover': { bgcolor: '#a3e61e' },
-                            }}
-                        >
+                        <Button variant="contained" onClick={handleSave} disabled={saving} sx={{ ...primaryBtnSx, px: 3 }}>
                             {saving ? 'Збереження...' : 'Зберегти'}
                         </Button>
                     </Box>

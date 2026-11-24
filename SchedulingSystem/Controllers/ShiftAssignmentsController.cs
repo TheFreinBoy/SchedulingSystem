@@ -15,47 +15,10 @@ namespace SchedulingSystem.Controllers;
 [ApiController]
 public class ShiftAssignmentsController(
     ApplicationDbContext context,
-    IScheduleGeneratorService generatorService)
+    IScheduleGeneratorService generatorService,
+    IScheduleValidationService validationService)
     : ControllerBase
 {
-    private static double CalculateShiftDurationHours(TimeSpan start, TimeSpan end)
-    {
-        return end >= start
-            ? (end - start).TotalHours
-            : (TimeSpan.FromHours(24) - start + end).TotalHours;
-    }
-
-    private async Task<string?> CheckWeeklyOvertimeWarningAsync(int employeeId, DateOnly date, ShiftType targetShift, int? excludeAssignmentId = null)
-    {
-        var employee = await context.Employees.FindAsync(employeeId);
-        if (employee == null) return null;
-
-        int diff = (7 + (date.DayOfWeek - DayOfWeek.Monday)) % 7;
-        var weekStart = date.AddDays(-diff);
-        var weekEnd = weekStart.AddDays(6);
-
-        var weekShifts = await context.ShiftAssignments
-            .Include(sa => sa.ShiftType)
-            .Where(sa => sa.EmployeeId == employeeId
-                         && sa.Date >= weekStart
-                         && sa.Date <= weekEnd
-                         && (!excludeAssignmentId.HasValue || sa.Id != excludeAssignmentId.Value))
-            .ToListAsync();
-
-        double existingHours = weekShifts
-            .Where(sa => sa.ShiftType != null)
-            .Sum(sa => CalculateShiftDurationHours(sa.ShiftType!.StartTime, sa.ShiftType.EndTime));
-
-        double newTotal = Math.Round(existingHours + CalculateShiftDurationHours(targetShift.StartTime, targetShift.EndTime), 1);
-
-        if (newTotal > employee.MaxHoursPerWeek)
-        {
-            return $"Зміну збережено, але перевищено норму годин за тиждень ({newTotal} / {employee.MaxHoursPerWeek} год).";
-        }
-
-        return null;
-    }
-
     [HttpGet]
     public async Task<ActionResult<IEnumerable<ShiftAssignmentDto>>> GetSchedule()
     {
@@ -80,29 +43,54 @@ public class ShiftAssignmentsController(
         return Ok(schedule);
     }
 
+    [HttpGet("Validate")]
+    public async Task<ActionResult<ScheduleAuditReportDto>> ValidateSchedule(
+        [FromQuery] DateOnly startDate,
+        [FromQuery] DateOnly endDate,
+        [FromQuery] int? positionId)
+    {
+        if (startDate > endDate)
+            return BadRequest("Початкова дата не може бути пізнішою за кінцеву.");
+
+        var report = await validationService.AuditScheduleAsync(startDate, endDate, positionId);
+        return Ok(report);
+    }
+
     [HttpPost("Assign")]
     public async Task<ActionResult> AssignShift(CreateShiftAssignmentDto dto)
     {
-        var employeeExists = await context.Employees.AnyAsync(e => e.Id == dto.EmployeeId);
         var shiftType = await context.ShiftTypes.FindAsync(dto.ShiftTypeId);
+        if (shiftType == null)
+            return BadRequest("Тип зміни не знайдено.");
 
-        if (!employeeExists || shiftType == null)
-            return BadRequest("Працівник або тип зміни не знайдені.");
+        string? warning = null;
 
-        var existingAssignment = await context.ShiftAssignments
-            .FirstOrDefaultAsync(sa => sa.EmployeeId == dto.EmployeeId && sa.Date == dto.Date);
+        if (dto.EmployeeId.HasValue)
+        {
+            var employeeExists = await context.Employees.AnyAsync(e => e.Id == dto.EmployeeId.Value);
+            if (!employeeExists)
+                return BadRequest("Працівника не знайдено.");
 
-        if (existingAssignment != null)
-            return BadRequest("Працівник вже має призначену зміну на цю дату.");
+            var violations = await validationService.ValidateSingleAssignmentAsync(
+                dto.EmployeeId.Value,
+                dto.Date,
+                dto.ShiftTypeId);
 
-        var warning = await CheckWeeklyOvertimeWarningAsync(dto.EmployeeId, dto.Date, shiftType);
+            if (violations.Any(v => v.Code == "DOUBLE_BOOKING"))
+                return BadRequest("Працівник вже має призначену зміну на цю дату.");
+
+            if (violations.Count > 0)
+            {
+                warning = "Зміну збережено з попередженням: " + string.Join(" ", violations.Select(v => v.Message));
+            }
+        }
 
         var assignment = new ShiftAssignment
         {
             Date = dto.Date,
             EmployeeId = dto.EmployeeId,
             ShiftTypeId = dto.ShiftTypeId,
-            Status = "Manual"
+            Status = dto.EmployeeId.HasValue ? "Manual" : "Unassigned"
         };
 
         context.ShiftAssignments.Add(assignment);
@@ -117,24 +105,37 @@ public class ShiftAssignmentsController(
         var assignment = await context.ShiftAssignments.FindAsync(id);
         if (assignment == null) return NotFound("Призначення не знайдено.");
 
-        var employeeExists = await context.Employees.AnyAsync(e => e.Id == dto.EmployeeId);
         var shiftType = await context.ShiftTypes.FindAsync(dto.ShiftTypeId);
+        if (shiftType == null)
+            return BadRequest("Тип зміни не знайдено.");
 
-        if (!employeeExists || shiftType == null)
-            return BadRequest("Працівник або тип зміни не знайдені.");
+        string? warning = null;
 
-        var conflict = await context.ShiftAssignments
-            .AnyAsync(sa => sa.Id != id && sa.EmployeeId == dto.EmployeeId && sa.Date == dto.Date);
+        if (dto.EmployeeId.HasValue)
+        {
+            var employeeExists = await context.Employees.AnyAsync(e => e.Id == dto.EmployeeId.Value);
+            if (!employeeExists)
+                return BadRequest("Працівника не знайдено.");
 
-        if (conflict)
-            return BadRequest("Працівник вже має іншу зміну на цю дату.");
+            var violations = await validationService.ValidateSingleAssignmentAsync(
+                dto.EmployeeId.Value,
+                dto.Date,
+                dto.ShiftTypeId,
+                excludeAssignmentId: id);
 
-        var warning = await CheckWeeklyOvertimeWarningAsync(dto.EmployeeId, dto.Date, shiftType, id);
+            if (violations.Any(v => v.Code == "DOUBLE_BOOKING"))
+                return BadRequest("Працівник вже має іншу зміну на цю дату.");
+
+            if (violations.Count > 0)
+            {
+                warning = "Зміну оновлено з попередженням: " + string.Join(" ", violations.Select(v => v.Message));
+            }
+        }
 
         assignment.Date = dto.Date;
         assignment.EmployeeId = dto.EmployeeId;
         assignment.ShiftTypeId = dto.ShiftTypeId;
-        assignment.Status = "Manual";
+        assignment.Status = dto.EmployeeId.HasValue ? "Manual" : "Unassigned";
 
         await context.SaveChangesAsync();
         return Ok(new { Warning = warning });
@@ -153,14 +154,24 @@ public class ShiftAssignmentsController(
     }
 
     [HttpDelete("Range")]
-    public async Task<IActionResult> DeleteShiftsInRange([FromQuery] DateOnly startDate, [FromQuery] DateOnly endDate)
+    public async Task<IActionResult> DeleteShiftsInRange(
+        [FromQuery] DateOnly startDate,
+        [FromQuery] DateOnly endDate,
+        [FromQuery] int? positionId)
     {
         if (startDate > endDate)
             return BadRequest("Початкова дата не може бути пізнішою за кінцеву.");
 
-        var shiftsToDelete = await context.ShiftAssignments
-            .Where(sa => sa.Date >= startDate && sa.Date <= endDate)
-            .ToListAsync();
+        var query = context.ShiftAssignments
+            .Include(sa => sa.ShiftType)
+            .Where(sa => sa.Date >= startDate && sa.Date <= endDate);
+
+        if (positionId.HasValue)
+        {
+            query = query.Where(sa => sa.ShiftType != null && sa.ShiftType.PositionId == positionId.Value);
+        }
+
+        var shiftsToDelete = await query.ToListAsync();
 
         if (shiftsToDelete.Count == 0)
             return Ok(new { Message = "Змін за вказаний період не знайдено." });
@@ -177,8 +188,25 @@ public class ShiftAssignmentsController(
         if (request.StartDate > request.EndDate)
             return BadRequest("Початкова дата не може бути пізнішою за кінцеву.");
 
-        int generatedCount = await generatorService.GenerateScheduleAsync(request.StartDate, request.EndDate);
+        int generatedCount = await generatorService.GenerateScheduleAsync(
+            request.StartDate,
+            request.EndDate,
+            request.PositionId);
 
-        return Ok(new { Message = $"Генерація завершена. Створено {generatedCount} нових змін." });
+        string scopeLabel = string.Empty;
+        if (request.PositionId.HasValue)
+        {
+            var positionName = await context.Positions
+                .Where(p => p.Id == request.PositionId.Value)
+                .Select(p => p.Name)
+                .FirstOrDefaultAsync();
+
+            if (!string.IsNullOrWhiteSpace(positionName))
+            {
+                scopeLabel = $" ({positionName})";
+            }
+        }
+
+        return Ok(new { Message = $"Генерація завершена{scopeLabel}. Призначено {generatedCount} нових змін." });
     }
 }
